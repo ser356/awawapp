@@ -100,13 +100,13 @@ async fn add_magnet(
     }
 }
 
-/// Start downloading selected files from a torrent
+/// Start streaming a specific file (sets up download for just that file)
 #[tauri::command]
-async fn start_download(
+async fn start_stream(
     state: State<'_, Arc<AppState>>,
     torrent_id: usize,
-    file_indices: Vec<usize>,
-) -> Result<CommandResult<()>, String> {
+    file_index: usize,
+) -> Result<CommandResult<String>, String> {
     let engine_guard = state.engine.read().await;
     let engine = match engine_guard.as_ref() {
         Some(e) => e.clone(),
@@ -114,20 +114,12 @@ async fn start_download(
     };
     drop(engine_guard);
 
-    // Select files if specified
-    if !file_indices.is_empty() {
-        if let Err(e) = engine.select_files(torrent_id, file_indices).await {
-            error!("Failed to select files: {}", e);
-            return Ok(CommandResult::err("Failed to select files"));
-        }
-    }
-
-    // Start download
-    match engine.start_download(torrent_id).await {
-        Ok(_) => Ok(CommandResult::ok(())),
+    // Start streaming - this sets only_files, unpauses, and returns URL
+    match engine.start_stream(torrent_id, file_index).await {
+        Ok(url) => Ok(CommandResult::ok(url)),
         Err(e) => {
-            error!("Failed to start download: {}", e);
-            Ok(CommandResult::err("Failed to start download"))
+            error!("Failed to start stream: {}", e);
+            Ok(CommandResult::err(&format!("Failed to start stream: {}", e)))
         }
     }
 }
@@ -211,8 +203,10 @@ async fn get_stream_url(
     };
     drop(engine_guard);
 
-    let url = engine.get_stream_url(torrent_id, file_index);
-    Ok(CommandResult::ok(url))
+    match engine.get_stream_url(torrent_id, file_index).await {
+        Ok(url) => Ok(CommandResult::ok(url)),
+        Err(e) => Ok(CommandResult::err(&format!("Failed to get stream URL: {}", e))),
+    }
 }
 
 /// Get torrent history from database
@@ -292,6 +286,56 @@ async fn delete_torrent(
 #[tauri::command]
 async fn get_download_dir(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     Ok(state.download_dir.to_string_lossy().to_string())
+}
+
+/// Open a URL in VLC
+#[tauri::command]
+async fn open_in_vlc(url: String) -> Result<CommandResult<()>, String> {
+    use std::process::Command;
+    
+    // On macOS, use 'open' command with VLC
+    #[cfg(target_os = "macos")]
+    {
+        match Command::new("open")
+            .args(["-a", "VLC", &url])
+            .spawn()
+        {
+            Ok(_) => Ok(CommandResult::ok(())),
+            Err(e) => {
+                error!("Failed to open VLC: {}", e);
+                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, try to find VLC and open with the URL
+        match Command::new("cmd")
+            .args(["/C", "start", "vlc", &url])
+            .spawn()
+        {
+            Ok(_) => Ok(CommandResult::ok(())),
+            Err(e) => {
+                error!("Failed to open VLC: {}", e);
+                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
+            }
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        match Command::new("vlc")
+            .arg(&url)
+            .spawn()
+        {
+            Ok(_) => Ok(CommandResult::ok(())),
+            Err(e) => {
+                error!("Failed to open VLC: {}", e);
+                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
+            }
+        }
+    }
 }
 
 /// Event emitter for real-time stats updates
@@ -389,7 +433,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             add_magnet,
-            start_download,
+            start_stream,
             pause_download,
             get_torrent_stats,
             get_all_stats,
@@ -399,6 +443,7 @@ pub fn run() {
             delete_from_history,
             delete_torrent,
             get_download_dir,
+            open_in_vlc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

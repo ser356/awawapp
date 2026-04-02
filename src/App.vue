@@ -15,6 +15,7 @@ const activeTorrents = ref<Map<number, { info: TorrentInfo; stats: TorrentStats 
 const selectedTorrent = ref<TorrentInfo | null>(null);
 const showFileSelector = ref(false);
 const errorMessage = ref('');
+const deleteConfirmId = ref<number | null>(null);
 
 // Event listener cleanup
 let unlistenStats: UnlistenFn | null = null;
@@ -38,30 +39,18 @@ function onTorrentAdded(info: TorrentInfo) {
       peers_total: 0,
       downloaded_bytes: 0,
       total_bytes: info.total_size,
-      state: 'Paused',
+      state: 'Ready',
       eta_seconds: null
     }
   });
 }
 
-// Start download after file selection
-async function startDownload(torrentId: number, fileIndices: number[]) {
-  showFileSelector.value = false;
-  selectedTorrent.value = null;
-  
-  try {
-    const result = await invoke<CommandResult<void>>('start_download', {
-      torrentId,
-      fileIndices
-    });
-    
-    if (!result.success) {
-      errorMessage.value = result.error || 'Failed to start download';
-    }
-  } catch (err) {
-    console.error('Start download error:', err);
-    errorMessage.value = 'Failed to start download';
-  }
+// Called when user starts streaming from FileSelector
+function onStreamingStarted() {
+  // Keep the modal open so user can stream more files
+  // Or close it:
+  // showFileSelector.value = false;
+  // selectedTorrent.value = null;
 }
 
 // Cancel file selection
@@ -79,31 +68,49 @@ async function pauseTorrent(id: number) {
   }
 }
 
-// Resume torrent
-async function resumeTorrent(id: number) {
-  try {
-    await invoke<CommandResult<void>>('start_download', {
-      torrentId: id,
-      fileIndices: []
-    });
-  } catch (err) {
-    console.error('Resume error:', err);
+// Resume torrent - reopens file selector to choose what to stream
+function resumeTorrent(id: number) {
+  const torrent = activeTorrents.value.get(id);
+  if (torrent?.info) {
+    selectedTorrent.value = torrent.info;
+    showFileSelector.value = true;
   }
 }
 
 // Delete torrent
 async function deleteTorrent(id: number) {
-  if (!confirm('Delete this torrent?')) return;
+  // Show confirmation modal
+  deleteConfirmId.value = id;
+}
+
+// Confirm delete action
+async function confirmDelete() {
+  const id = deleteConfirmId.value;
+  if (id === null) return;
+  
+  deleteConfirmId.value = null;
   
   try {
-    await invoke<CommandResult<void>>('delete_torrent', {
+    const result = await invoke<CommandResult<void>>('delete_torrent', {
       torrentId: id,
       deleteFiles: false
     });
-    activeTorrents.value.delete(id);
+    
+    if (result.success) {
+      activeTorrents.value.delete(id);
+    } else {
+      console.error('Delete failed:', result.error);
+      onError(result.error || 'Failed to delete torrent');
+    }
   } catch (err) {
     console.error('Delete error:', err);
+    onError('Failed to delete torrent');
   }
+}
+
+// Cancel delete action
+function cancelDelete() {
+  deleteConfirmId.value = null;
 }
 
 // Load magnet from history
@@ -153,7 +160,7 @@ onUnmounted(() => {
   <div class="app">
     <!-- Header -->
     <header class="app-header">
-      <h1>🧲 MagnetChaser</h1>
+      <h1>🧲 awawapp</h1>
       <p class="subtitle">Stream torrents to VLC</p>
     </header>
     
@@ -177,9 +184,21 @@ onUnmounted(() => {
           <div class="modal">
             <FileSelector
               :torrent="selectedTorrent"
-              @start-download="startDownload"
+              @streaming-started="onStreamingStarted"
               @cancel="cancelFileSelection"
             />
+          </div>
+        </div>
+        
+        <!-- Delete Confirmation Modal -->
+        <div v-if="deleteConfirmId !== null" class="modal-overlay" @click.self="cancelDelete">
+          <div class="modal confirm-modal">
+            <h3>Delete Torrent?</h3>
+            <p>This will remove the torrent from the list. Downloaded files will not be deleted.</p>
+            <div class="confirm-actions">
+              <button class="btn-secondary" @click="cancelDelete">Cancel</button>
+              <button class="btn-danger" @click="confirmDelete">Delete</button>
+            </div>
           </div>
         </div>
         
@@ -364,6 +383,62 @@ body {
   max-width: 600px;
   max-height: 80vh;
   overflow: auto;
+}
+
+/* Confirm Modal */
+.confirm-modal {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 400px;
+  text-align: center;
+}
+
+.confirm-modal h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-color);
+}
+
+.confirm-modal p {
+  color: var(--text-muted);
+  margin: 0 0 1.5rem 0;
+  font-size: 0.9rem;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.btn-secondary {
+  background: var(--btn-secondary);
+  color: var(--text-color);
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background 0.2s;
+}
+
+.btn-secondary:hover {
+  background: var(--btn-secondary-hover);
+}
+
+.btn-danger {
+  background: var(--error-color);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background 0.2s;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
 }
 
 /* Responsive */

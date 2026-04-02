@@ -6,20 +6,16 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "shell:allow-open",
+    "shell:allow-spawn",
     "shell:allow-execute",
+    "shell:allow-open",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "vlc",
-          "cmd": "/Applications/VLC.app/Contents/MacOS/VLC",
-          "args": true
-        },
-        {
-          "name": "open",
+          "name": "open-vlc",
           "cmd": "open",
-          "args": ["-a", "VLC", { "validator": "\\S+" }]
+          "args": true
         }
       ]
     }

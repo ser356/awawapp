@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { Command } from '@tauri-apps/plugin-shell';
 import type { TorrentStats, TorrentInfo, CommandResult } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../types';
 
@@ -18,7 +17,7 @@ const emit = defineEmits<{
 
 const isPaused = computed(() => {
   const state = props.stats.state.toLowerCase();
-  return state.includes('paused') || state.includes('stopped');
+  return state.includes('paused') || state.includes('stopped') || state.includes('ready');
 });
 
 const isCompleted = computed(() => props.stats.progress >= 99.9);
@@ -40,39 +39,30 @@ const streamableFiles = computed(() => {
 
 async function playInVlc(fileIndex: number) {
   try {
-    // Get the streaming URL
-    const result = await invoke<CommandResult<string>>('get_stream_url', {
+    // Start streaming - this sets up the file for download and returns URL
+    const result = await invoke<CommandResult<string>>('start_stream', {
       torrentId: props.stats.id,
       fileIndex
     });
     
     if (!result.success || !result.data) {
-      console.error('Failed to get stream URL:', result.error);
+      console.error('Failed to start stream:', result.error);
       return;
     }
     
     const streamUrl = result.data;
+    console.log('Opening stream URL in VLC:', streamUrl);
     
-    // Launch VLC with the stream URL
-    // Using macOS `open` command with VLC
-    const command = Command.create('open', ['-a', 'VLC', streamUrl]);
-    await command.execute();
+    // Open VLC via backend command
+    const vlcResult = await invoke<CommandResult<void>>('open_in_vlc', { url: streamUrl });
+    
+    if (!vlcResult.success) {
+      console.error('VLC open failed:', vlcResult.error);
+      alert(`URL de streaming:\n\n${streamUrl}\n\nAbre VLC → Archivo → Abrir ubicación de red`);
+    }
     
   } catch (err) {
-    console.error('Failed to open VLC:', err);
-    // Try alternative method
-    try {
-      const result = await invoke<CommandResult<string>>('get_stream_url', {
-        torrentId: props.stats.id,
-        fileIndex
-      });
-      if (result.success && result.data) {
-        // Open in browser as fallback
-        window.open(result.data, '_blank');
-      }
-    } catch (e) {
-      console.error('Fallback also failed:', e);
-    }
+    console.error('Failed to stream:', err);
   }
 }
 

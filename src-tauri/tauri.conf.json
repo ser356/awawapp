@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MagnetChaser",
+  "productName": "awawapp",
   "version": "0.1.0",
-  "identifier": "app.magnetchaser.desktop",
+  "identifier": "app.awawapp.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MagnetChaser - Torrent Streaming",
+        "title": "awawapp - Torrent Streaming",
         "width": 1000,
         "height": 700,
         "minWidth": 800,

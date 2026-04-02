@@ -8,12 +8,16 @@
 
 use anyhow::{Context, Result};
 use librqbit::{
+    api::{Api, TorrentIdOrHash},
+    http_api::{HttpApi, HttpApiOptions},
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent,
     Session, SessionOptions, SessionPersistenceConfig,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -118,6 +122,26 @@ impl TorrentEngine {
         .await
         .context("Failed to create torrent session")?;
 
+        // Start HTTP API server for streaming
+        let http_port = config.http_api_port;
+        let api = Api::new(session.clone(), None, None);
+        let http_api = HttpApi::new(api, Some(HttpApiOptions::default()));
+        
+        // Bind to localhost only for security
+        let addr: SocketAddr = ([127, 0, 0, 1], http_port).into();
+        let listener = TcpListener::bind(addr)
+            .await
+            .context("Failed to bind HTTP API server")?;
+        
+        info!("Starting HTTP API server on http://127.0.0.1:{}", http_port);
+        
+        // Spawn HTTP server in background
+        tokio::spawn(async move {
+            if let Err(e) = http_api.make_http_api_and_run(listener, None).await {
+                tracing::error!("HTTP API server error: {}", e);
+            }
+        });
+
         info!("Torrent engine initialized, download dir: {:?}", config.download_dir);
 
         Ok(Self {
@@ -128,8 +152,9 @@ impl TorrentEngine {
     }
 
     /// Add a magnet link and return torrent info
-    /// Set `paused` to true to just fetch metadata without starting download
-    pub async fn add_magnet(&self, magnet_uri: &str, paused: bool) -> Result<TorrentInfo> {
+    /// Add a magnet link in streaming mode (no auto-download)
+    /// Files are only downloaded when explicitly streamed
+    pub async fn add_magnet(&self, magnet_uri: &str, _paused: bool) -> Result<TorrentInfo> {
         // Validate magnet URI format
         if !magnet_uri.starts_with("magnet:?") {
             anyhow::bail!("Invalid magnet URI format");
@@ -140,53 +165,79 @@ impl TorrentEngine {
             anyhow::bail!("Magnet URI too long");
         }
 
+        // Append well-known public trackers to improve peer discovery
+        // This greatly increases the chance of fetching metadata quickly
+        let enhanced_uri = append_public_trackers(magnet_uri);
+        info!("Adding magnet with enhanced trackers: {}", &enhanced_uri[..enhanced_uri.len().min(100)]);
+
+        // Start UN-paused to allow metadata fetching, with no files selected
+        // This allows DHT/peers to be contacted for metadata
         let add_opts = AddTorrentOptions {
-            paused,
+            paused: false, // Need to be active to fetch metadata
+            only_files: Some(vec![]), // Empty = no files download after metadata
             ..Default::default()
         };
 
         let response = self
             .session
-            .add_torrent(AddTorrent::from_url(magnet_uri), Some(add_opts))
+            .add_torrent(AddTorrent::from_url(&enhanced_uri), Some(add_opts))
             .await
             .context("Failed to add torrent")?;
 
         let (torrent_idx, handle) = match response {
-            AddTorrentResponse::Added(idx, handle) => (idx, handle),
-            AddTorrentResponse::AlreadyManaged(idx, handle) => (idx, handle),
+            AddTorrentResponse::Added(idx, handle) => {
+                info!("Torrent added, fetching metadata from peers...");
+                (idx, handle)
+            },
+            AddTorrentResponse::AlreadyManaged(idx, handle) => {
+                info!("Torrent already exists, using cached metadata");
+                (idx, handle)
+            },
             AddTorrentResponse::ListOnly(_) => {
                 anyhow::bail!("Torrent was only listed, not added for download");
             }
         };
 
-        // Wait for metadata to be fetched
-        handle
-            .wait_until_initialized()
-            .await
-            .context("Failed to fetch torrent metadata")?;
-
-        let shared = handle.shared();
-        let info_hash = shared.info_hash;
+        // Wait for metadata with extended timeout (120 seconds)
+        // DHT peer discovery can be slow for less popular torrents
+        let timeout_duration = tokio::time::Duration::from_secs(120);
+        info!("Waiting for torrent metadata (timeout: {}s)...", timeout_duration.as_secs());
         
-        // Get stats
-        let stats = handle.stats();
-        
-        // Use info_hash as name (simplified - in production would parse the torrent name)
-        let name = format!("Torrent-{}", hex::encode(&info_hash.0[..8]));
+        match tokio::time::timeout(timeout_duration, handle.wait_until_initialized()).await {
+            Ok(result) => {
+                result.context("Failed to fetch torrent metadata")?;
+                info!("Metadata received successfully");
+            },
+            Err(_) => {
+                // Clean up the torrent that couldn't get metadata
+                let _ = self.session.delete(TorrentIdOrHash::Id(torrent_idx), false).await;
+                anyhow::bail!("Could not fetch torrent metadata after 120 seconds. This torrent may be unavailable or have no active peers. Try a different magnet link.");
+            }
+        };
 
-        // Get file count from file_progress
-        let files: Vec<TorrentFile> = stats.file_progress
-            .iter()
-            .enumerate()
-            .map(|(idx, &progress_bytes)| TorrentFile {
-                index: idx,
-                path: format!("File {}", idx + 1),
-                size: progress_bytes,
-                selected: true,
-            })
-            .collect();
-
-        let total_size = stats.total_bytes;
+        // Extract file info and name from metadata
+        let (name, files, total_size) = handle.with_metadata(|metadata| {
+            // Get torrent name from metadata, fallback to hash if not available
+            let torrent_name = metadata.name.clone()
+                .unwrap_or_else(|| format!("Torrent-{}", hex::encode(&handle.shared().info_hash.0[..8])));
+            
+            // Get actual file info from metadata.file_infos
+            let file_list: Vec<TorrentFile> = metadata.file_infos
+                .iter()
+                .enumerate()
+                .map(|(idx, fi)| TorrentFile {
+                    index: idx,
+                    path: fi.relative_filename.to_string_lossy().to_string(),
+                    size: fi.len,
+                    selected: true,
+                })
+                .collect();
+            
+            // Calculate total size from file lengths
+            let total: u64 = metadata.file_infos.iter().map(|fi| fi.len).sum();
+            
+            (torrent_name, file_list, total)
+        }).context("Failed to read torrent metadata")?;
 
         // Store handle info
         let mut torrents = self.torrents.write().await;
@@ -209,29 +260,58 @@ impl TorrentEngine {
         })
     }
 
-    /// Select which files to download from a torrent
-    pub async fn select_files(&self, torrent_id: usize, _file_indices: Vec<usize>) -> Result<()> {
-        let torrents = self.torrents.read().await;
-        if torrent_id >= torrents.len() {
-            anyhow::bail!("Torrent not found");
-        }
-
-        // Note: librqbit file selection can be done through the API
-        info!("File selection updated for torrent {}", torrent_id);
-
-        Ok(())
-    }
-
-    /// Start/resume downloading a torrent
-    pub async fn start_download(&self, torrent_id: usize) -> Result<()> {
+    /// Start streaming a specific file
+    /// This enables only that file for download and returns the stream URL
+    pub async fn start_stream(&self, torrent_id: usize, file_index: usize) -> Result<String> {
         let torrents = self.torrents.read().await;
         let stored = torrents.get(torrent_id)
             .ok_or_else(|| anyhow::anyhow!("Torrent not found"))?;
         
-        // Use session API to unpause
-        self.session.unpause(&stored.handle).await?;
-        info!("Started torrent {}", torrent_id);
+        // Get current files and add the new one (preserving existing selections)
+        let current = stored.handle.only_files();
+        let mut only_files: std::collections::HashSet<usize> = current
+            .map(|v| v.iter().copied().collect())
+            .unwrap_or_default();
+        only_files.insert(file_index);
+        
+        // Update which files to download
+        self.session.update_only_files(&stored.handle, &only_files).await?;
+        
+        // Try to unpause - ignore error if already running
+        if let Err(e) = self.session.unpause(&stored.handle).await {
+            let err_msg = e.to_string();
+            // "already live" is not a real error, torrent is already downloading
+            if !err_msg.contains("already live") && !err_msg.contains("already running") {
+                return Err(e.into());
+            }
+            info!("Torrent already running, continuing with stream");
+        }
+        
+        info!("Started streaming file {} of torrent {}", file_index, torrent_id);
+        
+        // Return the stream URL
+        Ok(format!(
+            "http://127.0.0.1:{}/torrents/{}/stream/{}",
+            self.config.http_api_port, stored.torrent_idx, file_index
+        ))
+    }
 
+    /// Add a file to the current streaming selection
+    pub async fn add_file_to_stream(&self, torrent_id: usize, file_index: usize) -> Result<()> {
+        let torrents = self.torrents.read().await;
+        let stored = torrents.get(torrent_id)
+            .ok_or_else(|| anyhow::anyhow!("Torrent not found"))?;
+        
+        // Get current only_files and add the new one
+        let current = stored.handle.only_files();
+        let mut only_files: std::collections::HashSet<usize> = current
+            .map(|v| v.iter().copied().collect())
+            .unwrap_or_default();
+        only_files.insert(file_index);
+        
+        self.session.update_only_files(&stored.handle, &only_files).await?;
+        info!("Added file {} to streaming for torrent {}", file_index, torrent_id);
+        
         Ok(())
     }
 
@@ -366,23 +446,33 @@ impl TorrentEngine {
     }
 
     /// Get the streaming URL for a file
-    pub fn get_stream_url(&self, torrent_id: usize, file_index: usize) -> String {
-        format!(
+    /// Uses the real librqbit torrent index for the HTTP API
+    pub async fn get_stream_url(&self, torrent_id: usize, file_index: usize) -> Result<String> {
+        let torrents = self.torrents.read().await;
+        let stored = torrents.get(torrent_id)
+            .ok_or_else(|| anyhow::anyhow!("Torrent not found"))?;
+        
+        // Use librqbit's torrent_idx for the HTTP API URL
+        Ok(format!(
             "http://127.0.0.1:{}/torrents/{}/stream/{}",
-            self.config.http_api_port, torrent_id, file_index
-        )
+            self.config.http_api_port, stored.torrent_idx, file_index
+        ))
     }
 
     /// Delete a torrent (optionally with files)
-    pub async fn delete_torrent(&self, torrent_id: usize, _delete_files: bool) -> Result<()> {
+    pub async fn delete_torrent(&self, torrent_id: usize, delete_files: bool) -> Result<()> {
         let torrents = self.torrents.read().await;
+        let stored = torrents.get(torrent_id)
+            .ok_or_else(|| anyhow::anyhow!("Torrent not found"))?;
         
-        if torrent_id >= torrents.len() {
-            anyhow::bail!("Torrent not found");
-        }
-
-        info!("Delete torrent {} requested", torrent_id);
-
+        let librqbit_id = stored.torrent_idx;
+        drop(torrents);
+        
+        // Use session API to delete
+        self.session.delete(TorrentIdOrHash::Id(librqbit_id), delete_files).await
+            .context("Failed to delete torrent")?;
+        
+        info!("Deleted torrent {} (librqbit id: {})", torrent_id, librqbit_id);
         Ok(())
     }
 
@@ -400,6 +490,37 @@ impl TorrentEngine {
     pub fn http_api_port(&self) -> u16 {
         self.config.http_api_port
     }
+}
+
+/// Well-known public trackers for improved peer discovery
+/// These are frequently updated and reliable trackers
+const PUBLIC_TRACKERS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.popcorn-tracker.org:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+];
+
+/// Append public trackers to a magnet URI for improved peer discovery
+/// Security: Only appends known safe tracker URLs, validates input first
+fn append_public_trackers(magnet_uri: &str) -> String {
+    let mut result = magnet_uri.to_string();
+    
+    for tracker in PUBLIC_TRACKERS {
+        // URL-encode the tracker for magnet URI format
+        let encoded = urlencoding::encode(tracker);
+        // Only add if not already present
+        if !magnet_uri.contains(tracker) {
+            result.push_str("&tr=");
+            result.push_str(&encoded);
+        }
+    }
+    
+    result
 }
 
 /// Validate a magnet URI format (basic security check)
