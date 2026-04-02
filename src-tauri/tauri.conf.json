@@ -36,10 +36,12 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "entitlements": null,
+      "entitlements": "entitlements.plist",
       "exceptionDomain": null,
-      "frameworks": [],
-      "minimumSystemVersion": "10.15"
+      "frameworks": ["Sparkle.framework"],
+      "minimumSystemVersion": "10.15",
+      "bundleVersion": "1",
+      "infoPlist": "Info.plist"
     }
   }
 }

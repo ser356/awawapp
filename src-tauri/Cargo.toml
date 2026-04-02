@@ -1,8 +1,8 @@
 [package]
 name = "awawapp"
 version = "0.1.0"
-description = "Torrent streaming app"
-authors = ["you"]
+description = "Torrent streaming app for macOS"
+authors = []
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -44,6 +44,11 @@ urlencoding = "2"
 # HTTP server for streaming
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
+
+# macOS Sparkle updates
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.25"
 
 [dev-dependencies]
 tempfile = "3"

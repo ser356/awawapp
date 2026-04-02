@@ -10,6 +10,7 @@
 
 mod database;
 mod memory_storage;
+mod sparkle;
 mod torrent_engine;
 
 use crate::database::{Database, TorrentHistory};
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
@@ -387,6 +389,20 @@ async fn start_stats_emitter(app: AppHandle, state: Arc<AppState>) {
     }
 }
 
+/// Check for updates using Sparkle (macOS only)
+#[tauri::command]
+fn check_for_updates() -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        sparkle::check_for_updates();
+        CommandResult::ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        CommandResult::err("Updates are only available on macOS")
+    }
+}
+
 // ============================================================================
 // Application Entry Point
 // ============================================================================
@@ -396,10 +412,87 @@ pub fn run() {
     // Initialize tracing for logging
     tracing_subscriber::fmt::init();
 
+    // Initialize Sparkle updater on macOS
+    #[cfg(target_os = "macos")]
+    sparkle::init_sparkle();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Create native menu with Check for Updates in app menu
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::AboutMetadataBuilder;
+                
+                let app_handle = app.handle();
+                
+                // App menu (macOS standard) with Check for Updates
+                let about = PredefinedMenuItem::about(app_handle, Some("About awawapp"), Some(
+                    AboutMetadataBuilder::new()
+                        .version(Some("0.1.0"))
+                        .build()
+                ))?;
+                let check_updates = MenuItem::with_id(app_handle, "check_updates", "Check for Updates...", true, None::<&str>)?;
+                let services = PredefinedMenuItem::services(app_handle, None)?;
+                let hide = PredefinedMenuItem::hide(app_handle, None)?;
+                let hide_others = PredefinedMenuItem::hide_others(app_handle, None)?;
+                let show_all = PredefinedMenuItem::show_all(app_handle, None)?;
+                let quit = PredefinedMenuItem::quit(app_handle, Some("Quit awawapp"))?;
+                let app_menu = Submenu::with_items(app_handle, "awawapp", true, &[
+                    &about,
+                    &check_updates,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &services,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &hide,
+                    &hide_others,
+                    &show_all,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &quit,
+                ])?;
+                
+                // Edit menu
+                let undo = PredefinedMenuItem::undo(app_handle, None)?;
+                let redo = PredefinedMenuItem::redo(app_handle, None)?;
+                let cut = PredefinedMenuItem::cut(app_handle, None)?;
+                let copy = PredefinedMenuItem::copy(app_handle, None)?;
+                let paste = PredefinedMenuItem::paste(app_handle, None)?;
+                let select_all = PredefinedMenuItem::select_all(app_handle, None)?;
+                let edit_menu = Submenu::with_items(app_handle, "Edit", true, &[
+                    &undo, &redo,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &cut, &copy, &paste,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &select_all,
+                ])?;
+                
+                // Window menu
+                let minimize = PredefinedMenuItem::minimize(app_handle, None)?;
+                let close = PredefinedMenuItem::close_window(app_handle, None)?;
+                let window_menu = Submenu::with_items(app_handle, "Window", true, &[
+                    &minimize,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &close,
+                ])?;
+                
+                let menu = Menu::with_items(app_handle, &[
+                    &app_menu,
+                    &edit_menu,
+                    &window_menu,
+                ])?;
+                
+                app.set_menu(menu)?;
+                
+                // Handle menu events
+                app.on_menu_event(|_app_handle, event| {
+                    if event.id().as_ref() == "check_updates" {
+                        sparkle::check_for_updates();
+                        info!("Check for updates triggered from menu");
+                    }
+                });
+            }
+            
             let app_handle = app.handle().clone();
             
             // Get app data directory for database and downloads
@@ -477,6 +570,7 @@ pub fn run() {
             delete_torrent,
             get_download_dir,
             open_in_vlc,
+            check_for_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

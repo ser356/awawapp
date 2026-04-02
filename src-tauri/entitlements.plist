@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Network access for downloading updates and torrent connections -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Network server for streaming HTTP server -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- Allow unsigned executable memory (required for JIT in some cases) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Disable library validation for Sparkle framework -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

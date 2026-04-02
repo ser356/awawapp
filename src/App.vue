@@ -160,12 +160,50 @@ async function setupStatsListener() {
   });
 }
 
+// Easter egg: "awawa" sound
+const keyBuffer = ref('');
+
+function playAwawaSound() {
+  // Create new Audio instance each time for reliable playback
+  const audio = new Audio('/awawa.ogg');
+  audio.volume = 1.0;
+  audio.play().catch(err => console.log('Audio play error:', err));
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  // Only track letter keys
+  if (event.key.length === 1 && /[a-zA-Z]/.test(event.key)) {
+    keyBuffer.value += event.key.toLowerCase();
+    
+    // Keep only last 5 characters
+    if (keyBuffer.value.length > 5) {
+      keyBuffer.value = keyBuffer.value.slice(-5);
+    }
+    
+    // Check for "awawa"
+    if (keyBuffer.value === 'awawa') {
+      playAwawaSound();
+      keyBuffer.value = ''; // Reset buffer
+      
+      // Show toast notification
+      toast.add({
+        severity: 'info',
+        summary: '🐾 awawa!',
+        detail: 'You found the secret!',
+        life: 2000
+      });
+    }
+  }
+}
+
 onMounted(() => {
   setupStatsListener();
+  window.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onUnmounted(() => {
   unlistenStats?.();
+  window.removeEventListener('keydown', handleGlobalKeydown);
 });
 </script>
 
