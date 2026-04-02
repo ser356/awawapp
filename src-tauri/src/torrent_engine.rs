@@ -265,7 +265,79 @@ impl TorrentEngine {
         })
     }
 
-    /// Start streaming a specific file
+    /// Add a torrent from raw .torrent file bytes
+    pub async fn add_torrent_file(&self, bytes: Vec<u8>) -> Result<TorrentInfo> {
+        if bytes.is_empty() {
+            anyhow::bail!("Torrent file is empty");
+        }
+        if bytes.len() > 10 * 1024 * 1024 {
+            anyhow::bail!("Torrent file too large (max 10 MB)");
+        }
+
+        let add_opts = AddTorrentOptions {
+            paused: false,
+            only_files: Some(vec![]),
+            ..Default::default()
+        };
+
+        let response = self
+            .session
+            .add_torrent(
+                AddTorrent::from_bytes(bytes),
+                Some(add_opts),
+            )
+            .await
+            .context("Failed to add torrent file")?;
+
+        let (torrent_idx, handle) = match response {
+            AddTorrentResponse::Added(idx, handle) => (idx, handle),
+            AddTorrentResponse::AlreadyManaged(idx, handle) => (idx, handle),
+            AddTorrentResponse::ListOnly(_) => {
+                anyhow::bail!("Torrent was only listed, not added");
+            }
+        };
+
+        // .torrent files already contain metadata — no need to wait for peers
+        let timeout_duration = tokio::time::Duration::from_secs(30);
+        match tokio::time::timeout(timeout_duration, handle.wait_until_initialized()).await {
+            Ok(result) => result.context("Failed to initialize torrent from file")?,
+            Err(_) => anyhow::bail!("Timed out initializing torrent from file"),
+        };
+
+        let (name, files, total_size) = handle.with_metadata(|metadata| {
+            let torrent_name = metadata.name.clone()
+                .unwrap_or_else(|| format!("Torrent-{}", hex::encode(&handle.shared().info_hash.0[..8])));
+
+            let file_list: Vec<TorrentFile> = metadata.file_infos
+                .iter()
+                .enumerate()
+                .map(|(idx, fi)| TorrentFile {
+                    index: idx,
+                    path: fi.relative_filename.to_string_lossy().to_string(),
+                    size: fi.len,
+                    selected: true,
+                })
+                .collect();
+
+            let total: u64 = metadata.file_infos.iter().map(|fi| fi.len).sum();
+            (torrent_name, file_list, total)
+        }).context("Failed to read torrent metadata")?;
+
+        let mut torrents = self.torrents.write().await;
+        let id = torrents.len();
+        torrents.push(StoredTorrent {
+            handle,
+            name: name.clone(),
+            total_size,
+            files: files.clone(),
+            torrent_idx,
+        });
+
+        info!("Added torrent from file: {} (id={})", name, id);
+        Ok(TorrentInfo { id, name, files, total_size })
+    }
+
+
     /// This enables only that file for download and returns the stream URL
     pub async fn start_stream(&self, torrent_id: usize, file_index: usize) -> Result<String> {
         let torrents = self.torrents.read().await;
