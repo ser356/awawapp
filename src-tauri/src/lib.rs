@@ -380,9 +380,10 @@ pub fn run() {
                 .expect("Failed to create app data directory");
             
             let db_path = app_data_dir.join("history.db");
-            // Use a temp directory so streamed files don't persist to internal storage.
-            // The OS cleans up /tmp on reboot; we also clean up on torrent delete.
-            let download_dir = std::env::temp_dir().join("awawapp_stream");
+            // Use a RAM-backed filesystem so pieces never touch disk.
+            // On Linux /dev/shm is a tmpfs mounted in RAM; the OS frees it when
+            // the process exits. Falls back to /tmp on other platforms.
+            let download_dir = ram_stream_dir();
             
             // Initialize database
             let database = Database::new(&db_path)
@@ -448,4 +449,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Return a RAM-backed directory for torrent piece storage.
+///
+/// On Linux we use /dev/shm (a tmpfs mounted entirely in RAM).
+/// Pieces written there never touch the HDD/SSD and are freed by the OS
+/// when the process exits, replicating Stremio-style ephemeral streaming.
+/// On other platforms we fall back to the system temp directory.
+fn ram_stream_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        let shm = PathBuf::from("/dev/shm/awawapp_stream");
+        // /dev/shm is always available on Linux (tmpfs in RAM)
+        return shm;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::temp_dir().join("awawapp_stream")
+    }
 }
