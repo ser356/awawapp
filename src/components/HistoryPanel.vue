@@ -3,6 +3,8 @@ import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { TorrentHistory, CommandResult } from '../types';
 import { formatBytes, formatDate } from '../types';
+import InputText from 'primevue/inputtext';
+import Button from 'primevue/button';
 
 const emit = defineEmits<{
   (e: 'load-magnet', magnetLink: string): void;
@@ -79,10 +81,10 @@ function loadMagnet(magnetLink: string) {
 
 function getStatusColor(status: string): string {
   switch (status.toLowerCase()) {
-    case 'completed': return 'var(--success-color, #10b981)';
-    case 'downloading': return 'var(--accent-color, #6366f1)';
-    case 'error': return 'var(--error-color, #ef4444)';
-    default: return 'var(--text-muted, #888)';
+    case 'completed': return 'var(--success-color, #8fb573)';
+    case 'downloading': return 'var(--accent-color, #9d8a78)';
+    case 'error': return 'var(--error-color, #c75a5a)';
+    default: return 'var(--text-muted, #a09080)';
   }
 }
 
@@ -93,22 +95,29 @@ onMounted(loadHistory);
   <div class="history-panel">
     <div class="history-header">
       <h3>History</h3>
-      <button @click="loadHistory" class="refresh-btn" :disabled="isLoading">
-        🔄
-      </button>
-    </div>
-    
-    <div class="search-box">
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="Search history..."
-        @input="searchHistory"
-        maxlength="100"
+      <Button
+        @click="loadHistory"
+        :loading="isLoading"
+        icon="pi pi-refresh"
+        text
+        rounded
+        size="small"
+        class="refresh-btn"
       />
     </div>
     
-    <div v-if="isLoading" class="loading">Loading...</div>
+    <div class="search-box">
+      <InputText
+        v-model="searchQuery"
+        placeholder="Search history..."
+        @input="searchHistory"
+        maxlength="100"
+        size="small"
+        class="search-input"
+      />
+    </div>
+    
+    <div v-if="isLoading && !history.length" class="loading">Loading...</div>
     
     <div v-else-if="errorMessage" class="error">{{ errorMessage }}</div>
     
@@ -138,20 +147,23 @@ onMounted(loadHistory);
           </span>
         </div>
         <div class="item-actions">
-          <button
+          <Button
             @click="loadMagnet(item.magnet_link)"
-            class="action-btn"
-            title="Load again"
-          >
-            ↻
-          </button>
-          <button
+            icon="pi pi-replay"
+            text
+            rounded
+            size="small"
+            v-tooltip.left="'Load again'"
+          />
+          <Button
             @click="deleteFromHistory(item.id)"
-            class="action-btn delete"
-            title="Delete"
-          >
-            ×
-          </button>
+            icon="pi pi-times"
+            text
+            rounded
+            size="small"
+            severity="danger"
+            v-tooltip.left="'Delete'"
+          />
         </div>
       </div>
     </div>
@@ -160,7 +172,7 @@ onMounted(loadHistory);
 
 <style scoped>
 .history-panel {
-  background: var(--card-bg, #1a1a2e);
+  background: var(--card-bg, #2a2420);
   border-radius: 12px;
   padding: 1rem;
   height: 100%;
@@ -178,41 +190,32 @@ onMounted(loadHistory);
 .history-header h3 {
   margin: 0;
   font-size: 1rem;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
 }
 
 .refresh-btn {
-  background: transparent;
-  border: none;
-  font-size: 1.1rem;
-  cursor: pointer;
-  padding: 0.25rem;
-  border-radius: 4px;
-  transition: background 0.2s;
+  color: var(--text-color, #f5f0ea) !important;
 }
 
-.refresh-btn:hover:not(:disabled) {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.1));
+.refresh-btn:hover {
+  color: #fff !important;
+  background: var(--hover-bg) !important;
 }
 
-.refresh-btn:disabled {
-  opacity: 0.5;
-}
-
-.search-box input {
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  background: var(--input-bg, #0f0f1a);
-  border: 1px solid var(--border-color, #333);
-  border-radius: 6px;
-  color: var(--text-color, #fff);
-  font-size: 0.85rem;
+.search-box {
   margin-bottom: 0.75rem;
 }
 
-.search-box input:focus {
-  outline: none;
-  border-color: var(--accent-color, #6366f1);
+.search-input {
+  width: 100%;
+  background: var(--input-bg, #1e1a17) !important;
+  border-color: var(--border-color, #3d352d) !important;
+  color: var(--text-color, #f5f0ea) !important;
+}
+
+.search-input:focus {
+  border-color: var(--accent-color, #9d8a78) !important;
+  box-shadow: 0 0 0 2px rgba(157, 138, 120, 0.2) !important;
 }
 
 .loading,
@@ -220,12 +223,12 @@ onMounted(loadHistory);
 .empty {
   text-align: center;
   padding: 2rem 1rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   font-size: 0.9rem;
 }
 
 .error {
-  color: var(--error-color, #ef4444);
+  color: var(--error-color, #c75a5a);
 }
 
 .history-list {
@@ -238,7 +241,7 @@ onMounted(loadHistory);
   justify-content: space-between;
   align-items: flex-start;
   padding: 0.75rem;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color, #3d352d);
   transition: background 0.2s;
 }
 
@@ -247,7 +250,7 @@ onMounted(loadHistory);
 }
 
 .history-item:hover {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.05));
+  background: var(--hover-bg, rgba(157, 138, 120, 0.1));
 }
 
 .item-info {
@@ -258,7 +261,7 @@ onMounted(loadHistory);
 .item-name {
   display: block;
   font-size: 0.85rem;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -273,7 +276,7 @@ onMounted(loadHistory);
 }
 
 .item-date {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .item-status {
@@ -281,37 +284,12 @@ onMounted(loadHistory);
 }
 
 .item-size {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .item-actions {
   display: flex;
   gap: 0.25rem;
   margin-left: 0.5rem;
-}
-
-.action-btn {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--text-muted, #888);
-  font-size: 1rem;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.action-btn:hover {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.1));
-  color: var(--text-color, #fff);
-}
-
-.action-btn.delete:hover {
-  background: var(--error-color, #ef4444);
-  color: white;
 }
 </style>

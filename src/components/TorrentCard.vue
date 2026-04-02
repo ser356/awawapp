@@ -3,6 +3,9 @@ import { computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { TorrentStats, TorrentInfo, CommandResult } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../types';
+import Button from 'primevue/button';
+import ProgressBar from 'primevue/progressbar';
+import Tag from 'primevue/tag';
 
 const props = defineProps<{
   stats: TorrentStats;
@@ -23,9 +26,17 @@ const isPaused = computed(() => {
 const isCompleted = computed(() => props.stats.progress >= 99.9);
 
 const progressBarColor = computed(() => {
-  if (isCompleted.value) return 'var(--success-color, #10b981)';
-  if (isPaused.value) return 'var(--warning-color, #f59e0b)';
-  return 'var(--accent-color, #6366f1)';
+  if (isCompleted.value) return 'var(--success-color, #8fb573)';
+  if (isPaused.value) return 'var(--warning-color, #d9a85c)';
+  return 'var(--accent-color, #9d8a78)';
+});
+
+const tagSeverity = computed(() => {
+  const state = props.stats.state.toLowerCase();
+  if (state.includes('download') || state === 'live') return 'info';
+  if (state === 'completed' || state === 'seeding') return 'success';
+  if (state === 'paused') return 'warn';
+  return 'secondary';
 });
 
 // Get streamable files from torrent info
@@ -79,9 +90,7 @@ function togglePause() {
   <div class="torrent-card" :class="{ completed: isCompleted, paused: isPaused }">
     <div class="card-header">
       <h3 class="torrent-name">{{ stats.name || 'Loading...' }}</h3>
-      <div class="state-badge" :class="stats.state.toLowerCase()">
-        {{ stats.state }}
-      </div>
+      <Tag :value="stats.state" :severity="tagSeverity" />
     </div>
     
     <div class="progress-section">
@@ -101,19 +110,19 @@ function togglePause() {
     
     <div class="stats-row">
       <div class="stat">
-        <span class="stat-icon">⬇️</span>
+        <i class="pi pi-download stat-icon"></i>
         <span class="stat-value">{{ formatSpeed(stats.download_speed) }}</span>
       </div>
       <div class="stat">
-        <span class="stat-icon">⬆️</span>
+        <i class="pi pi-upload stat-icon"></i>
         <span class="stat-value">{{ formatSpeed(stats.upload_speed) }}</span>
       </div>
       <div class="stat">
-        <span class="stat-icon">👥</span>
+        <i class="pi pi-users stat-icon"></i>
         <span class="stat-value">{{ stats.peers_connected }} / {{ stats.peers_total }}</span>
       </div>
       <div class="stat" v-if="stats.eta_seconds">
-        <span class="stat-icon">⏱️</span>
+        <i class="pi pi-clock stat-icon"></i>
         <span class="stat-value">{{ formatEta(stats.eta_seconds) }}</span>
       </div>
     </div>
@@ -122,15 +131,17 @@ function togglePause() {
     <div v-if="streamableFiles.length > 0" class="stream-section">
       <p class="stream-label">Stream in VLC:</p>
       <div class="stream-files">
-        <button
+        <Button
           v-for="file in streamableFiles.slice(0, 3)"
           :key="file.index"
           @click="playInVlc(file.index)"
+          :label="file.path.split('/').pop()"
+          icon="pi pi-play"
+          size="small"
+          outlined
           class="stream-btn"
           :title="file.path"
-        >
-          🎬 {{ file.path.split('/').pop() }}
-        </button>
+        />
         <span v-if="streamableFiles.length > 3" class="more-files">
           +{{ streamableFiles.length - 3 }} more
         </span>
@@ -138,19 +149,28 @@ function togglePause() {
     </div>
     
     <div class="card-actions">
-      <button @click="togglePause" class="action-btn">
-        {{ isPaused ? '▶️ Resume' : '⏸️ Pause' }}
-      </button>
-      <button @click="emit('delete', stats.id)" class="action-btn danger">
-        🗑️ Delete
-      </button>
+      <Button
+        @click="togglePause"
+        :icon="isPaused ? 'pi pi-play' : 'pi pi-pause'"
+        :label="isPaused ? 'Resume' : 'Pause'"
+        size="small"
+        outlined
+      />
+      <Button
+        @click="emit('delete', stats.id)"
+        icon="pi pi-trash"
+        label="Delete"
+        size="small"
+        severity="danger"
+        outlined
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
 .torrent-card {
-  background: var(--card-bg, #1a1a2e);
+  background: var(--card-bg, #2a2420);
   border-radius: 12px;
   padding: 1.25rem;
   margin-bottom: 1rem;
@@ -159,11 +179,11 @@ function togglePause() {
 
 .torrent-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 .torrent-card.completed {
-  border-left: 4px solid var(--success-color, #10b981);
+  border-left: 4px solid var(--success-color, #8fb573);
 }
 
 .torrent-card.paused {
@@ -181,37 +201,10 @@ function togglePause() {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
   word-break: break-word;
   flex: 1;
   margin-right: 1rem;
-}
-
-.state-badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  background: var(--badge-bg, #2a2a40);
-  color: var(--text-muted, #888);
-}
-
-.state-badge.live,
-.state-badge.downloading {
-  background: rgba(99, 102, 241, 0.2);
-  color: var(--accent-color, #6366f1);
-}
-
-.state-badge.completed,
-.state-badge.seeding {
-  background: rgba(16, 185, 129, 0.2);
-  color: var(--success-color, #10b981);
-}
-
-.state-badge.paused {
-  background: rgba(245, 158, 11, 0.2);
-  color: var(--warning-color, #f59e0b);
 }
 
 .progress-section {
@@ -220,7 +213,7 @@ function togglePause() {
 
 .progress-bar {
   height: 8px;
-  background: var(--progress-bg, #2a2a40);
+  background: var(--progress-bg, #3d352d);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 0.5rem;
@@ -239,12 +232,12 @@ function togglePause() {
 }
 
 .progress-percent {
-  color: var(--accent-color, #6366f1);
+  color: var(--accent-color, #9d8a78);
   font-weight: 600;
 }
 
 .progress-size {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .stats-row {
@@ -262,22 +255,23 @@ function togglePause() {
 
 .stat-icon {
   font-size: 0.9rem;
+  color: var(--text-color, #f5f0ea);
 }
 
 .stat-value {
   font-size: 0.85rem;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
 }
 
 .stream-section {
   margin-bottom: 1rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-color, #3d352d);
 }
 
 .stream-label {
   font-size: 0.8rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   margin: 0 0 0.5rem 0;
 }
 
@@ -289,52 +283,21 @@ function togglePause() {
 }
 
 .stream-btn {
-  padding: 0.4rem 0.75rem;
-  background: var(--btn-secondary, #2a2a40);
-  color: var(--text-color, #fff);
-  border: none;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: background 0.2s;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.stream-btn:hover {
-  background: var(--accent-color, #6366f1);
-}
-
 .more-files {
   font-size: 0.75rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .card-actions {
   display: flex;
   gap: 0.5rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--border-color, #333);
-}
-
-.action-btn {
-  padding: 0.5rem 1rem;
-  background: var(--btn-secondary, #2a2a40);
-  color: var(--text-color, #fff);
-  border: none;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.action-btn:hover {
-  background: var(--btn-secondary-hover, #3a3a50);
-}
-
-.action-btn.danger:hover {
-  background: var(--error-color, #ef4444);
+  border-top: 1px solid var(--border-color, #3d352d);
 }
 </style>

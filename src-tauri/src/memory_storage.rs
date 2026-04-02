@@ -24,6 +24,7 @@ const PAGE_SIZE: u64 = 1024 * 1024;
 pub struct InMemoryStorageFactory;
 
 impl InMemoryStorageFactory {
+    #[allow(dead_code)]
     pub fn boxed_factory() -> BoxStorageFactory {
         Self.boxed()
     }

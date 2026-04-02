@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { TorrentInfo, CommandResult } from '../types';
 import { formatBytes } from '../types';
+import Button from 'primevue/button';
 
 const props = defineProps<{
   torrent: TorrentInfo | null;
@@ -73,7 +74,17 @@ async function streamFile(fileIndex: number) {
 <template>
   <div v-if="torrent" class="file-selector">
     <div class="header">
-      <h2>{{ torrent.name }}</h2>
+      <div class="header-top">
+        <h2>{{ torrent.name }}</h2>
+        <Button
+          @click="emit('cancel')"
+          icon="pi pi-times"
+          text
+          rounded
+          severity="secondary"
+          class="close-btn"
+        />
+      </div>
       <p class="subtitle">Selecciona un archivo para hacer streaming</p>
       <p class="total-size">Tamaño total: {{ formatBytes(torrent.total_size) }}</p>
     </div>
@@ -93,9 +104,12 @@ async function streamFile(fileIndex: number) {
           <span class="file-name">{{ file.path }}</span>
           <span class="file-size">{{ formatBytes(file.size) }}</span>
         </div>
-        <button @click="streamFile(file.index)" class="stream-btn">
-          ▶️ Stream
-        </button>
+        <Button
+          @click="streamFile(file.index)"
+          icon="pi pi-play"
+          label="Stream"
+          size="small"
+        />
       </div>
     </div>
     
@@ -115,17 +129,12 @@ async function streamFile(fileIndex: number) {
         </div>
       </details>
     </div>
-    
-    <div class="actions">
-      <button @click="emit('cancel')" class="cancel-btn">Cerrar</button>
-    </div>
   </div>
 </template>
 
 <style scoped>
 .file-selector {
-  background: var(--card-bg, #1a1a2e);
-  border-radius: 12px;
+  background: transparent;
   padding: 1.5rem;
   max-height: 70vh;
   display: flex;
@@ -137,21 +146,39 @@ async function streamFile(fileIndex: number) {
   margin-bottom: 1rem;
 }
 
+.header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
 .header h2 {
   margin: 0 0 0.5rem 0;
   font-size: 1.25rem;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
   word-break: break-word;
+  flex: 1;
+}
+
+.close-btn {
+  flex-shrink: 0;
+  color: var(--text-muted) !important;
+}
+
+.close-btn:hover {
+  color: var(--text-color) !important;
+  background: var(--hover-bg) !important;
 }
 
 .subtitle {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   font-size: 0.9rem;
   margin: 0 0 0.25rem 0;
 }
 
 .total-size {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   font-size: 0.8rem;
   margin: 0;
 }
@@ -159,13 +186,13 @@ async function streamFile(fileIndex: number) {
 .no-streamable {
   padding: 2rem;
   text-align: center;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .file-list {
   flex: 1;
   overflow-y: auto;
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-color, #3d352d);
   border-radius: 8px;
   max-height: 300px;
   margin-bottom: 1rem;
@@ -175,7 +202,7 @@ async function streamFile(fileIndex: number) {
   display: flex;
   align-items: center;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color, #3d352d);
   transition: background 0.2s;
 }
 
@@ -184,7 +211,7 @@ async function streamFile(fileIndex: number) {
 }
 
 .file-item:hover {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.05));
+  background: var(--hover-bg, rgba(157, 138, 120, 0.1));
 }
 
 .file-icon {
@@ -201,47 +228,31 @@ async function streamFile(fileIndex: number) {
 
 .file-name {
   font-size: 0.9rem;
-  color: var(--text-color, #fff);
+  color: var(--text-color, #f5f0ea);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .file-size {
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   font-size: 0.75rem;
   margin-top: 0.25rem;
 }
 
-.stream-btn {
-  padding: 0.5rem 1rem;
-  background: var(--accent-color, #6366f1);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-  white-space: nowrap;
-}
-
-.stream-btn:hover {
-  background: var(--accent-hover, #4f46e5);
-}
-
 .other-files {
-  margin-bottom: 1rem;
+  margin-top: 1rem;
 }
 
 .other-files summary {
   cursor: pointer;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
   font-size: 0.85rem;
   padding: 0.5rem;
 }
 
 .other-file-list {
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-color, #3d352d);
   border-radius: 8px;
   max-height: 150px;
   overflow-y: auto;
@@ -252,9 +263,9 @@ async function streamFile(fileIndex: number) {
   display: flex;
   align-items: center;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color, #3d352d);
   font-size: 0.8rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .other-file-item:last-child {
@@ -268,33 +279,11 @@ async function streamFile(fileIndex: number) {
 .other-file-item .file-name {
   flex: 1;
   font-size: 0.8rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted, #a09080);
 }
 
 .other-file-item .file-size {
   font-size: 0.7rem;
   margin-left: 0.5rem;
-}
-
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border-color, #333);
-}
-
-.cancel-btn {
-  padding: 0.75rem 1.25rem;
-  background: transparent;
-  color: var(--text-muted, #888);
-  border: 1px solid var(--border-color, #333);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.cancel-btn:hover {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.05));
-  color: var(--text-color, #fff);
 }
 </style>

@@ -299,6 +299,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
+ "tempfile",
  "tokio",
  "tower-http 0.5.2",
  "tracing",

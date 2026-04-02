@@ -3,6 +3,8 @@ import { ref, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { CommandResult, TorrentInfo } from '../types';
 import { isValidMagnetLink } from '../types';
+import InputText from 'primevue/inputtext';
+import Button from 'primevue/button';
 
 const emit = defineEmits<{
   (e: 'torrent-added', info: TorrentInfo): void;
@@ -66,9 +68,8 @@ function handlePaste(event: ClipboardEvent) {
 <template>
   <div class="magnet-input">
     <div class="input-container">
-      <input
+      <InputText
         v-model="magnetLink"
-        type="text"
         placeholder="Paste magnet link here..."
         @paste="handlePaste"
         @keyup.enter="addMagnet"
@@ -77,14 +78,14 @@ function handlePaste(event: ClipboardEvent) {
         autocomplete="off"
         spellcheck="false"
       />
-      <button
+      <Button
         @click="addMagnet"
         :disabled="!isValidInput || isLoading"
+        :loading="isLoading"
+        label="Add Torrent"
+        icon="pi pi-plus"
         class="add-button"
-      >
-        <span v-if="isLoading" class="spinner"></span>
-        <span v-else>Add Torrent</span>
-      </button>
+      />
     </div>
     <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
   </div>
@@ -93,7 +94,7 @@ function handlePaste(event: ClipboardEvent) {
 <style scoped>
 .magnet-input {
   padding: 1rem;
-  background: var(--card-bg, #1a1a2e);
+  background: var(--card-bg, #2a2420);
   border-radius: 12px;
   margin-bottom: 1rem;
 }
@@ -105,65 +106,33 @@ function handlePaste(event: ClipboardEvent) {
 
 .magnet-field {
   flex: 1;
-  padding: 0.875rem 1rem;
-  border: 2px solid var(--border-color, #333);
-  border-radius: 8px;
-  background: var(--input-bg, #0f0f1a);
-  color: var(--text-color, #fff);
-  font-size: 0.95rem;
-  transition: border-color 0.2s;
+  background: var(--input-bg, #1e1a17) !important;
+  border-color: var(--border-color, #3d352d) !important;
+  color: var(--text-color, #f5f0ea) !important;
 }
 
 .magnet-field:focus {
-  outline: none;
-  border-color: var(--accent-color, #6366f1);
-}
-
-.magnet-field:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  border-color: var(--accent-color, #9d8a78) !important;
+  box-shadow: 0 0 0 2px rgba(157, 138, 120, 0.2) !important;
 }
 
 .add-button {
-  padding: 0.875rem 1.5rem;
-  background: var(--accent-color, #6366f1);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.1s;
+  background: var(--accent-color, #9d8a78) !important;
+  border-color: var(--accent-color, #9d8a78) !important;
   min-width: 140px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .add-button:hover:not(:disabled) {
-  background: var(--accent-hover, #4f46e5);
-  transform: translateY(-1px);
+  background: var(--accent-hover, #b5a08c) !important;
+  border-color: var(--accent-hover, #b5a08c) !important;
 }
 
 .add-button:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 .error-message {
-  color: var(--error-color, #ef4444);
+  color: var(--error-color, #c75a5a);
   font-size: 0.875rem;
   margin-top: 0.5rem;
   margin-bottom: 0;

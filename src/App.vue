@@ -8,7 +8,14 @@ import FileSelector from './components/FileSelector.vue';
 import TorrentCard from './components/TorrentCard.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
 
+import Dialog from 'primevue/dialog';
+import Button from 'primevue/button';
+import Toast from 'primevue/toast';
+import { useToast } from 'primevue/usetoast';
+
 import type { TorrentInfo, TorrentStats, CommandResult } from './types';
+
+const toast = useToast();
 
 // State
 const activeTorrents = ref<Map<number, { info: TorrentInfo; stats: TorrentStats }>>(new Map());
@@ -16,6 +23,7 @@ const selectedTorrent = ref<TorrentInfo | null>(null);
 const showFileSelector = ref(false);
 const errorMessage = ref('');
 const deleteConfirmId = ref<number | null>(null);
+const showDeleteDialog = ref(false);
 
 // Event listener cleanup
 let unlistenStats: UnlistenFn | null = null;
@@ -81,6 +89,7 @@ function resumeTorrent(id: number) {
 async function deleteTorrent(id: number) {
   // Show confirmation modal
   deleteConfirmId.value = id;
+  showDeleteDialog.value = true;
 }
 
 // Confirm delete action
@@ -88,6 +97,7 @@ async function confirmDelete() {
   const id = deleteConfirmId.value;
   if (id === null) return;
   
+  showDeleteDialog.value = false;
   deleteConfirmId.value = null;
   
   try {
@@ -98,6 +108,7 @@ async function confirmDelete() {
     
     if (result.success) {
       activeTorrents.value.delete(id);
+      toast.add({ severity: 'success', summary: 'Deleted', detail: 'Torrent removed', life: 3000 });
     } else {
       console.error('Delete failed:', result.error);
       onError(result.error || 'Failed to delete torrent');
@@ -110,6 +121,7 @@ async function confirmDelete() {
 
 // Cancel delete action
 function cancelDelete() {
+  showDeleteDialog.value = false;
   deleteConfirmId.value = null;
 }
 
@@ -126,6 +138,7 @@ function loadMagnetFromHistory(magnetLink: string) {
 
 // Handle errors
 function onError(message: string) {
+  toast.add({ severity: 'error', summary: 'Error', detail: message, life: 5000 });
   errorMessage.value = message;
   setTimeout(() => {
     errorMessage.value = '';
@@ -157,17 +170,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app">
+  <div class="app app-dark">
+    <!-- Toast for notifications -->
+    <Toast position="top-right" />
+    
     <!-- Header -->
     <header class="app-header">
-      <h1>🧲 awawapp</h1>
+      <div class="logo-container">
+        <img src="/mascot.png" alt="awawapp mascot" class="mascot-logo" />
+        <h1>awawapp</h1>
+      </div>
       <p class="subtitle">Stream torrents to VLC</p>
     </header>
-    
-    <!-- Error Toast -->
-    <div v-if="errorMessage" class="error-toast">
-      {{ errorMessage }}
-    </div>
     
     <!-- Main Content -->
     <div class="app-content">
@@ -179,28 +193,36 @@ onUnmounted(() => {
           @error="onError"
         />
         
-        <!-- File Selector Modal -->
-        <div v-if="showFileSelector && selectedTorrent" class="modal-overlay">
-          <div class="modal">
-            <FileSelector
-              :torrent="selectedTorrent"
-              @streaming-started="onStreamingStarted"
-              @cancel="cancelFileSelection"
-            />
-          </div>
-        </div>
+        <!-- File Selector Dialog -->
+        <Dialog
+          v-model:visible="showFileSelector"
+          modal
+          :closable="true"
+          :draggable="false"
+          :showHeader="false"
+          :style="{ width: '600px', maxWidth: '90vw' }"
+          :pt="{ content: { style: 'padding: 0' } }"
+        >
+          <FileSelector
+            :torrent="selectedTorrent"
+            @streaming-started="onStreamingStarted"
+            @cancel="cancelFileSelection"
+          />
+        </Dialog>
         
-        <!-- Delete Confirmation Modal -->
-        <div v-if="deleteConfirmId !== null" class="modal-overlay" @click.self="cancelDelete">
-          <div class="modal confirm-modal">
-            <h3>Delete Torrent?</h3>
-            <p>This will remove the torrent from the list. Downloaded files will not be deleted.</p>
-            <div class="confirm-actions">
-              <button class="btn-secondary" @click="cancelDelete">Cancel</button>
-              <button class="btn-danger" @click="confirmDelete">Delete</button>
-            </div>
-          </div>
-        </div>
+        <!-- Delete Confirmation Dialog -->
+        <Dialog
+          v-model:visible="showDeleteDialog"
+          modal
+          header="Delete Torrent?"
+          :style="{ width: '400px' }"
+        >
+          <p class="confirm-text">This will remove the torrent from the list. Downloaded files will not be deleted.</p>
+          <template #footer>
+            <Button label="Cancel" severity="secondary" outlined @click="cancelDelete" />
+            <Button label="Delete" severity="danger" @click="confirmDelete" />
+          </template>
+        </Dialog>
         
         <!-- Active Torrents -->
         <section class="torrents-section">
@@ -233,23 +255,23 @@ onUnmounted(() => {
 
 <style>
 :root {
-  /* Color scheme */
-  --bg-color: #0f0f1a;
-  --card-bg: #1a1a2e;
-  --input-bg: #0f0f1a;
-  --border-color: #2a2a40;
-  --text-color: #f0f0f5;
-  --text-muted: #888;
-  --accent-color: #6366f1;
-  --accent-hover: #4f46e5;
-  --success-color: #10b981;
-  --success-hover: #059669;
-  --warning-color: #f59e0b;
-  --error-color: #ef4444;
-  --hover-bg: rgba(255, 255, 255, 0.05);
-  --btn-secondary: #2a2a40;
-  --btn-secondary-hover: #3a3a50;
-  --progress-bg: #2a2a40;
+  /* Mascot-inspired color scheme: warm browns, black, white */
+  --bg-color: #1a1614;
+  --card-bg: #2a2420;
+  --input-bg: #1e1a17;
+  --border-color: #3d352d;
+  --text-color: #f5f0ea;
+  --text-muted: #a09080;
+  --accent-color: #9d8a78;
+  --accent-hover: #b5a08c;
+  --success-color: #8fb573;
+  --success-hover: #7aa35e;
+  --warning-color: #d9a85c;
+  --error-color: #c75a5a;
+  --hover-bg: rgba(157, 138, 120, 0.1);
+  --btn-secondary: #3d352d;
+  --btn-secondary-hover: #4d433a;
+  --progress-bg: #3d352d;
   
   /* Typography */
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -287,39 +309,29 @@ body {
   padding: 1rem 0 1.5rem;
 }
 
+.logo-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.mascot-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
 .app-header h1 {
   font-size: 1.75rem;
   font-weight: 700;
-  margin-bottom: 0.25rem;
+  margin: 0;
+  color: #fff;
 }
 
 .app-header .subtitle {
   color: var(--text-muted);
   font-size: 0.9rem;
-}
-
-.error-toast {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  background: var(--error-color);
-  color: white;
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  z-index: 1000;
-  animation: slideIn 0.3s ease;
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
 }
 
 .app-content {
@@ -365,80 +377,195 @@ body {
 }
 
 /* Modal */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
+/* PrimeVue overrides for dark theme */
+.p-dialog {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5) !important;
 }
 
-.modal {
-  width: 90%;
-  max-width: 600px;
-  max-height: 80vh;
-  overflow: auto;
+.p-dialog-header {
+  background: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  padding: 1.25rem !important;
 }
 
-/* Confirm Modal */
-.confirm-modal {
-  background: var(--card-bg);
-  border-radius: 12px;
-  padding: 1.5rem;
-  max-width: 400px;
-  text-align: center;
+.p-dialog-header .p-dialog-title {
+  color: var(--text-color) !important;
+  font-weight: 600 !important;
 }
 
-.confirm-modal h3 {
-  margin: 0 0 0.5rem 0;
-  color: var(--text-color);
+.p-dialog-header-close {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border: none !important;
 }
 
-.confirm-modal p {
+.p-dialog-header-close:hover {
+  color: var(--text-color) !important;
+  background: var(--hover-bg) !important;
+}
+
+.p-dialog-content {
+  background: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  padding: 1.25rem !important;
+}
+
+.p-dialog-footer {
+  background: var(--card-bg) !important;
+  border-top: 1px solid var(--border-color) !important;
+  padding: 1rem 1.25rem !important;
+}
+
+.p-dialog-mask {
+  background: rgba(0, 0, 0, 0.7) !important;
+}
+
+.confirm-text {
   color: var(--text-muted);
-  margin: 0 0 1.5rem 0;
+  margin: 0;
   font-size: 0.9rem;
 }
 
-.confirm-actions {
-  display: flex;
-  gap: 1rem;
-  justify-content: center;
+/* PrimeVue Button customization */
+.p-button {
+  background: var(--accent-color) !important;
+  border-color: var(--accent-color) !important;
+  color: white !important;
 }
 
-.btn-secondary {
-  background: var(--btn-secondary);
-  color: var(--text-color);
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: background 0.2s;
+.p-button:hover {
+  background: var(--accent-hover) !important;
+  border-color: var(--accent-hover) !important;
 }
 
-.btn-secondary:hover {
-  background: var(--btn-secondary-hover);
+.p-button.p-button-outlined {
+  color: var(--accent-color) !important;
+  border-color: var(--accent-color) !important;
+  background: transparent !important;
 }
 
-.btn-danger {
-  background: var(--error-color);
-  color: white;
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: background 0.2s;
+.p-button.p-button-outlined:hover {
+  background: var(--hover-bg) !important;
+  color: var(--accent-color) !important;
 }
 
-.btn-danger:hover {
-  background: #dc2626;
+.p-button.p-button-secondary {
+  background: var(--btn-secondary) !important;
+  border-color: var(--btn-secondary) !important;
+  color: var(--text-color) !important;
+}
+
+.p-button.p-button-secondary:hover {
+  background: var(--btn-secondary-hover) !important;
+  border-color: var(--btn-secondary-hover) !important;
+}
+
+.p-button.p-button-secondary.p-button-outlined {
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border-color) !important;
+}
+
+.p-button.p-button-secondary.p-button-outlined:hover {
+  background: var(--hover-bg) !important;
+  color: var(--text-color) !important;
+}
+
+.p-button.p-button-danger {
+  background: var(--error-color) !important;
+  border-color: var(--error-color) !important;
+}
+
+.p-button.p-button-danger:hover {
+  background: #a84a4a !important;
+  border-color: #a84a4a !important;
+}
+
+.p-button.p-button-danger.p-button-outlined {
+  background: transparent !important;
+  color: var(--error-color) !important;
+  border-color: var(--error-color) !important;
+}
+
+.p-button.p-button-danger.p-button-outlined:hover {
+  background: rgba(199, 90, 90, 0.1) !important;
+}
+
+/* PrimeVue InputText */
+.p-inputtext {
+  background: var(--input-bg) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+.p-inputtext:focus {
+  border-color: var(--accent-color) !important;
+  box-shadow: 0 0 0 2px rgba(157, 138, 120, 0.2) !important;
+}
+
+.p-inputtext::placeholder {
+  color: var(--text-muted) !important;
+}
+
+/* PrimeVue Tag */
+.p-tag {
+  background: var(--btn-secondary) !important;
+  color: var(--text-muted) !important;
+}
+
+.p-tag.p-tag-info {
+  background: rgba(157, 138, 120, 0.2) !important;
+  color: var(--accent-color) !important;
+}
+
+.p-tag.p-tag-success {
+  background: rgba(143, 181, 115, 0.2) !important;
+  color: var(--success-color) !important;
+}
+
+.p-tag.p-tag-warn {
+  background: rgba(217, 168, 92, 0.2) !important;
+  color: var(--warning-color) !important;
+}
+
+.p-tag.p-tag-danger {
+  background: rgba(199, 90, 90, 0.2) !important;
+  color: var(--error-color) !important;
+}
+
+/* PrimeVue Toast customization */
+.p-toast {
+  opacity: 0.98;
+}
+
+.p-toast-message {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+.p-toast-message-content {
+  color: var(--text-color) !important;
+}
+
+.p-toast-summary {
+  color: var(--text-color) !important;
+}
+
+.p-toast-detail {
+  color: var(--text-muted) !important;
+}
+
+.p-toast-message-success {
+  border-left: 4px solid var(--success-color) !important;
+}
+
+.p-toast-message-error {
+  border-left: 4px solid var(--error-color) !important;
 }
 
 /* Responsive */
