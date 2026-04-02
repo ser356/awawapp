@@ -14,6 +14,8 @@ const emit = defineEmits<{
 const magnetLink = ref('');
 const isLoading = ref(false);
 const errorMessage = ref('');
+const fileInput = ref<HTMLInputElement | null>(null);
+const isDragging = ref(false);
 
 // Input sanitization - remove potentially dangerous characters
 function sanitizeInput(input: string): string {
@@ -27,20 +29,20 @@ const isValidInput = computed(() => {
 
 async function addMagnet() {
   const sanitizedLink = sanitizeInput(magnetLink.value);
-  
+
   if (!isValidMagnetLink(sanitizedLink)) {
     errorMessage.value = 'Invalid magnet link format';
     return;
   }
-  
+
   isLoading.value = true;
   errorMessage.value = '';
-  
+
   try {
     const result = await invoke<CommandResult<TorrentInfo>>('add_magnet', {
       magnetUri: sanitizedLink
     });
-    
+
     if (result.success && result.data) {
       emit('torrent-added', result.data);
       magnetLink.value = '';
@@ -57,6 +59,57 @@ async function addMagnet() {
   }
 }
 
+async function addTorrentFile(file: File) {
+  if (!file.name.endsWith('.torrent')) {
+    errorMessage.value = 'Only .torrent files are supported';
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    errorMessage.value = 'Torrent file is too large (max 10 MB)';
+    return;
+  }
+
+  isLoading.value = true;
+  errorMessage.value = '';
+  try {
+    const buffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+
+    const result = await invoke<CommandResult<TorrentInfo>>('add_torrent_file', {
+      bytes,
+      nameHint: file.name.replace(/\.torrent$/i, ''),
+    });
+
+    if (result.success && result.data) {
+      emit('torrent-added', result.data);
+    } else {
+      errorMessage.value = result.error || 'Failed to load torrent file';
+      emit('error', errorMessage.value);
+    }
+  } catch {
+    errorMessage.value = 'Failed to read torrent file';
+    emit('error', errorMessage.value);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+function openFilePicker() {
+  fileInput.value?.click();
+}
+
+function onFileSelected(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (file) addTorrentFile(file);
+  if (fileInput.value) fileInput.value.value = '';
+}
+
+function onDrop(event: DragEvent) {
+  isDragging.value = false;
+  const file = event.dataTransfer?.files?.[0];
+  if (file) addTorrentFile(file);
+}
+
 function handlePaste(event: ClipboardEvent) {
   const pastedText = event.clipboardData?.getData('text') || '';
   if (isValidMagnetLink(pastedText.trim())) {
@@ -66,7 +119,13 @@ function handlePaste(event: ClipboardEvent) {
 </script>
 
 <template>
-  <div class="magnet-input">
+  <div
+    class="magnet-input"
+    :class="{ dragging: isDragging }"
+    @dragover.prevent="isDragging = true"
+    @dragleave.prevent="isDragging = false"
+    @drop.prevent="onDrop"
+  >
     <div class="input-container">
       <InputText
         v-model="magnetLink"
@@ -86,8 +145,29 @@ function handlePaste(event: ClipboardEvent) {
         icon="pi pi-plus"
         class="add-button"
       />
+      <Button
+        @click="openFilePicker"
+        :disabled="isLoading"
+        icon="pi pi-file"
+        label=".torrent"
+        severity="secondary"
+        outlined
+        class="file-button"
+        title="Import .torrent file"
+      />
     </div>
-    <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+
+    <p v-if="isDragging" class="drop-hint">Drop .torrent file here</p>
+    <p v-else-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+
+    <!-- Hidden file input -->
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".torrent"
+      style="display: none"
+      @change="onFileSelected"
+    />
   </div>
 </template>
 
@@ -97,6 +177,12 @@ function handlePaste(event: ClipboardEvent) {
   background: var(--card-bg, #2a2420);
   border-radius: 12px;
   margin-bottom: 1rem;
+  border: 2px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.magnet-input.dragging {
+  border-color: var(--accent-color, #9d8a78);
 }
 
 .input-container {
@@ -131,10 +217,29 @@ function handlePaste(event: ClipboardEvent) {
   opacity: 0.5;
 }
 
+.file-button {
+  border-color: var(--border-color, #3d352d) !important;
+  color: var(--text-muted, #a09080) !important;
+  white-space: nowrap;
+}
+
+.file-button:hover:not(:disabled) {
+  border-color: var(--accent-color, #9d8a78) !important;
+  color: var(--accent-color, #9d8a78) !important;
+}
+
 .error-message {
   color: var(--error-color, #c75a5a);
   font-size: 0.875rem;
   margin-top: 0.5rem;
   margin-bottom: 0;
+}
+
+.drop-hint {
+  color: var(--accent-color, #9d8a78);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+  text-align: center;
 }
 </style>

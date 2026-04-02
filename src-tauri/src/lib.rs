@@ -101,6 +101,35 @@ async fn add_magnet(
     }
 }
 
+/// Add a torrent from .torrent file bytes
+#[tauri::command]
+async fn add_torrent_file(
+    state: State<'_, Arc<AppState>>,
+    bytes: Vec<u8>,
+    name_hint: Option<String>,
+) -> Result<CommandResult<TorrentInfo>, String> {
+    let engine_guard = state.engine.read().await;
+    let engine = match engine_guard.as_ref() {
+        Some(e) => e.clone(),
+        None => return Ok(CommandResult::err("Torrent engine not initialized")),
+    };
+    drop(engine_guard);
+
+    match engine.add_torrent_file(bytes).await {
+        Ok(info) => {
+            let display_name = name_hint.as_deref().unwrap_or(&info.name);
+            if let Err(e) = state.database.add_magnet(&format!("file:{}", info.name), display_name) {
+                error!("Failed to save torrent file to history: {}", e);
+            }
+            Ok(CommandResult::ok(info))
+        }
+        Err(e) => {
+            error!("Failed to add torrent file: {}", e);
+            Ok(CommandResult::err("Failed to load torrent file"))
+        }
+    }
+}
+
 /// Start streaming a specific file (sets up download for just that file)
 #[tauri::command]
 async fn start_stream(
@@ -436,6 +465,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             add_magnet,
+            add_torrent_file,
             start_stream,
             pause_download,
             get_torrent_stats,
