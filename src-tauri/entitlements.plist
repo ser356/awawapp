@@ -13,9 +13,5 @@
     <!-- Allow unsigned executable memory (required for JIT in some cases) -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
-    
-    <!-- Disable library validation for Sparkle framework -->
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
 </dict>
 </plist>

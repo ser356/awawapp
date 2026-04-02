@@ -10,7 +10,6 @@
 
 mod database;
 mod memory_storage;
-mod sparkle;
 mod torrent_engine;
 
 use crate::database::{Database, TorrentHistory};
@@ -21,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+use tauri::menu::{Menu, Submenu, PredefinedMenuItem};
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
@@ -389,20 +388,6 @@ async fn start_stats_emitter(app: AppHandle, state: Arc<AppState>) {
     }
 }
 
-/// Check for updates using Sparkle (macOS only)
-#[tauri::command]
-fn check_for_updates() -> CommandResult<()> {
-    #[cfg(target_os = "macos")]
-    {
-        sparkle::check_for_updates();
-        CommandResult::ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        CommandResult::err("Updates are only available on macOS")
-    }
-}
-
 // ============================================================================
 // Application Entry Point
 // ============================================================================
@@ -411,10 +396,6 @@ fn check_for_updates() -> CommandResult<()> {
 pub fn run() {
     // Initialize tracing for logging
     tracing_subscriber::fmt::init();
-
-    // Initialize Sparkle updater on macOS
-    #[cfg(target_os = "macos")]
-    sparkle::init_sparkle();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -433,7 +414,6 @@ pub fn run() {
                         .version(Some("0.1.0"))
                         .build()
                 ))?;
-                let check_updates = MenuItem::with_id(app_handle, "check_updates", "Check for Updates...", true, None::<&str>)?;
                 let services = PredefinedMenuItem::services(app_handle, None)?;
                 let hide = PredefinedMenuItem::hide(app_handle, None)?;
                 let hide_others = PredefinedMenuItem::hide_others(app_handle, None)?;
@@ -441,7 +421,6 @@ pub fn run() {
                 let quit = PredefinedMenuItem::quit(app_handle, Some("Quit awawapp"))?;
                 let app_menu = Submenu::with_items(app_handle, "awawapp", true, &[
                     &about,
-                    &check_updates,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &services,
                     &PredefinedMenuItem::separator(app_handle)?,
@@ -484,13 +463,7 @@ pub fn run() {
                 
                 app.set_menu(menu)?;
                 
-                // Handle menu events
-                app.on_menu_event(|_app_handle, event| {
-                    if event.id().as_ref() == "check_updates" {
-                        sparkle::check_for_updates();
-                        info!("Check for updates triggered from menu");
-                    }
-                });
+
             }
             
             let app_handle = app.handle().clone();
@@ -570,7 +543,6 @@ pub fn run() {
             delete_torrent,
             get_download_dir,
             open_in_vlc,
-            check_for_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

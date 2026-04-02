@@ -45,11 +45,6 @@ urlencoding = "2"
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
 
-# macOS Sparkle updates
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
-cocoa = "0.25"
-
 [dev-dependencies]
 tempfile = "3"
 
