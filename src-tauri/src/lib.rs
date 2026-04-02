@@ -9,6 +9,7 @@
 //! - Shell commands are restricted to VLC launch only
 
 mod database;
+mod memory_storage;
 mod torrent_engine;
 
 use crate::database::{Database, TorrentHistory};
@@ -380,10 +381,10 @@ pub fn run() {
                 .expect("Failed to create app data directory");
             
             let db_path = app_data_dir.join("history.db");
-            // Use a RAM-backed filesystem so pieces never touch disk.
-            // On Linux /dev/shm is a tmpfs mounted in RAM; the OS frees it when
-            // the process exits. Falls back to /tmp on other platforms.
-            let download_dir = ram_stream_dir();
+            // Pieces are stored in RAM via InMemoryStorageFactory, so the
+            // download_dir is only used by librqbit for internal bookkeeping
+            // (not for actual file data). A temp dir is fine cross-platform.
+            let download_dir = std::env::temp_dir().join("awawapp_session");
             
             // Initialize database
             let database = Database::new(&db_path)
@@ -451,21 +452,3 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Return a RAM-backed directory for torrent piece storage.
-///
-/// On Linux we use /dev/shm (a tmpfs mounted entirely in RAM).
-/// Pieces written there never touch the HDD/SSD and are freed by the OS
-/// when the process exits, replicating Stremio-style ephemeral streaming.
-/// On other platforms we fall back to the system temp directory.
-fn ram_stream_dir() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        let shm = PathBuf::from("/dev/shm/awawapp_stream");
-        // /dev/shm is always available on Linux (tmpfs in RAM)
-        return shm;
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        std::env::temp_dir().join("awawapp_stream")
-    }
-}
