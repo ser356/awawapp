@@ -10,9 +10,12 @@ use anyhow::{Context, Result};
 use librqbit::{
     api::{Api, TorrentIdOrHash},
     http_api::{HttpApi, HttpApiOptions},
+    storage::StorageFactoryExt,
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent,
-    Session, SessionOptions, SessionPersistenceConfig,
+    Session, SessionOptions,
 };
+
+use crate::memory_storage::InMemoryStorageFactory;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -107,11 +110,13 @@ impl TorrentEngine {
         // Configure session with security-minded defaults
         let session_opts = SessionOptions {
             disable_dht: !config.dht_enabled,
-            disable_dht_persistence: false,
-            persistence: Some(SessionPersistenceConfig::Json {
-                folder: Some(config.download_dir.clone()),
-            }),
+            // No session persistence — pieces live only in RAM.
+            disable_dht_persistence: true,
+            persistence: None,
             listen_port_range: Some(6881..6889),
+            // Route all piece storage to RAM instead of disk.
+            // Works cross-platform: Linux, macOS, Windows.
+            default_storage_factory: Some(InMemoryStorageFactory.boxed()),
             ..Default::default()
         };
 

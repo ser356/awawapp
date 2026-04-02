@@ -9,6 +9,7 @@
 //! - Shell commands are restricted to VLC launch only
 
 mod database;
+mod memory_storage;
 mod torrent_engine;
 
 use crate::database::{Database, TorrentHistory};
@@ -380,8 +381,10 @@ pub fn run() {
                 .expect("Failed to create app data directory");
             
             let db_path = app_data_dir.join("history.db");
-            let download_dir = dirs::download_dir()
-                .unwrap_or_else(|| app_data_dir.join("downloads"));
+            // Pieces are stored in RAM via InMemoryStorageFactory, so the
+            // download_dir is only used by librqbit for internal bookkeeping
+            // (not for actual file data). A temp dir is fine cross-platform.
+            let download_dir = std::env::temp_dir().join("awawapp_session");
             
             // Initialize database
             let database = Database::new(&db_path)
@@ -448,3 +451,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
