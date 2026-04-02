@@ -380,8 +380,9 @@ pub fn run() {
                 .expect("Failed to create app data directory");
             
             let db_path = app_data_dir.join("history.db");
-            let download_dir = dirs::download_dir()
-                .unwrap_or_else(|| app_data_dir.join("downloads"));
+            // Use a temp directory so streamed files don't persist to internal storage.
+            // The OS cleans up /tmp on reboot; we also clean up on torrent delete.
+            let download_dir = std::env::temp_dir().join("awawapp_stream");
             
             // Initialize database
             let database = Database::new(&db_path)

@@ -107,10 +107,10 @@ impl TorrentEngine {
         // Configure session with security-minded defaults
         let session_opts = SessionOptions {
             disable_dht: !config.dht_enabled,
-            disable_dht_persistence: false,
-            persistence: Some(SessionPersistenceConfig::Json {
-                folder: Some(config.download_dir.clone()),
-            }),
+            // Disable DHT persistence and session state since we use temp storage.
+            // There's no point saving state for files we'll delete after streaming.
+            disable_dht_persistence: true,
+            persistence: None,
             listen_port_range: Some(6881..6889),
             ..Default::default()
         };

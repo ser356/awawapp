@@ -93,7 +93,7 @@ async function confirmDelete() {
   try {
     const result = await invoke<CommandResult<void>>('delete_torrent', {
       torrentId: id,
-      deleteFiles: false
+      deleteFiles: true  // always clean up temp files
     });
     
     if (result.success) {
