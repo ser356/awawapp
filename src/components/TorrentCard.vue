@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import type { TorrentStats, TorrentInfo, CommandResult } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../types';
 import Button from 'primevue/button';
-import ProgressBar from 'primevue/progressbar';
 import Tag from 'primevue/tag';
 
 const props = defineProps<{
