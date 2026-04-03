@@ -15,7 +15,7 @@ import pl from './pl';
 import tr from './tr';
 import ar from './ar';
 
-const supportedLocales = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko', 'zh', 'nl', 'sv', 'pl', 'tr', 'ar'];
+const supportedLocales = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko', 'zh', 'nl', 'sv', 'pl', 'tr', 'ar'] as const;
 
 // Get saved language or detect from browser
 function getDefaultLocale(): string {
@@ -62,7 +62,7 @@ export default i18n;
 // Helper to change language
 export function setLanguage(lang: string) {
   if (supportedLocales.includes(lang)) {
-    i18n.global.locale.value = lang;
+    i18n.global.locale.value = lang as typeof supportedLocales[number];
     localStorage.setItem('awawapp-language', lang);
   }
 }
