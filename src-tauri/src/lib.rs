@@ -8,9 +8,10 @@
 //! - Error messages don't expose internal system details
 //! - Shell commands are restricted to VLC launch only
 
-mod database;
+pub mod cli;
+pub mod database;
 mod memory_storage;
-mod torrent_engine;
+pub mod torrent_engine;
 
 use crate::database::{Database, TorrentHistory};
 use crate::torrent_engine::{EngineConfig, TorrentEngine, TorrentInfo, TorrentStats};
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri::menu::{Menu, Submenu, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
@@ -64,6 +65,7 @@ impl<T> CommandResult<T> {
 /// Add a magnet link and fetch its metadata
 #[tauri::command]
 async fn add_magnet(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     magnet_uri: String,
 ) -> Result<CommandResult<TorrentInfo>, String> {
@@ -93,6 +95,9 @@ async fn add_magnet(
                 let _ = state.database.update_torrent_info(id, &info.name, info.total_size as i64);
             }
 
+            // Notify frontend to refresh history
+            let _ = app.emit("history-updated", ());
+
             Ok(CommandResult::ok(info))
         }
         Err(e) => {
@@ -105,6 +110,7 @@ async fn add_magnet(
 /// Add a torrent from .torrent file bytes
 #[tauri::command]
 async fn add_torrent_file(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     bytes: Vec<u8>,
     name_hint: Option<String>,
@@ -119,9 +125,11 @@ async fn add_torrent_file(
     match engine.add_torrent_file(bytes).await {
         Ok(info) => {
             let display_name = name_hint.as_deref().unwrap_or(&info.name);
-            if let Err(e) = state.database.add_magnet(&format!("file:{}", info.name), display_name) {
+            if let Err(e) = state.database.add_torrent_entry(&format!("file:{}", info.name), display_name) {
                 error!("Failed to save torrent file to history: {}", e);
             }
+            // Notify frontend to refresh history
+            let _ = app.emit("history-updated", ());
             Ok(CommandResult::ok(info))
         }
         Err(e) => {
@@ -413,6 +421,7 @@ pub fn run() {
                         .version(Some("0.1.0"))
                         .build()
                 ))?;
+                let install_cli_item = MenuItem::with_id(app_handle, "install_cli", "Install CLI...", true, None::<&str>)?;
                 let services = PredefinedMenuItem::services(app_handle, None)?;
                 let hide = PredefinedMenuItem::hide(app_handle, None)?;
                 let hide_others = PredefinedMenuItem::hide_others(app_handle, None)?;
@@ -420,6 +429,8 @@ pub fn run() {
                 let quit = PredefinedMenuItem::quit(app_handle, Some("Quit awawapp"))?;
                 let app_menu = Submenu::with_items(app_handle, "awawapp", true, &[
                     &about,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &install_cli_item,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &services,
                     &PredefinedMenuItem::separator(app_handle)?,
@@ -462,6 +473,13 @@ pub fn run() {
                 
                 app.set_menu(menu)?;
                 
+                // Handle menu events
+                app.on_menu_event(move |app, event| {
+                    if event.id().as_ref() == "install_cli" {
+                        // Emit event to frontend to trigger CLI installation
+                        let _ = app.emit("install-cli-clicked", ());
+                    }
+                });
 
             }
             

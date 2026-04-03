@@ -244,6 +244,13 @@ impl TorrentEngine {
             (torrent_name, file_list, total)
         }).context("Failed to read torrent metadata")?;
 
+        // Pause torrent after metadata is fetched - it will be unpaused when streaming starts.
+        // This prevents "chunk tracker empty" errors from peers connecting with nothing to download.
+        if let Err(e) = self.session.pause(&handle).await {
+            // Ignore pause errors - torrent might already be paused
+            info!("Could not pause torrent after metadata (likely already paused): {}", e);
+        }
+
         // Store handle info
         let mut torrents = self.torrents.write().await;
         let id = torrents.len();
@@ -322,6 +329,11 @@ impl TorrentEngine {
             let total: u64 = metadata.file_infos.iter().map(|fi| fi.len).sum();
             (torrent_name, file_list, total)
         }).context("Failed to read torrent metadata")?;
+
+        // Pause torrent after metadata is fetched - it will be unpaused when streaming starts.
+        if let Err(e) = self.session.pause(&handle).await {
+            info!("Could not pause torrent after metadata (likely already paused): {}", e);
+        }
 
         let mut torrents = self.torrents.write().await;
         let id = torrents.len();

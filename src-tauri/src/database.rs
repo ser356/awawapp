@@ -71,7 +71,12 @@ impl Database {
         if !magnet_link.starts_with("magnet:?") {
             anyhow::bail!("Invalid magnet link format");
         }
-        
+        self.add_torrent_entry(magnet_link, name)
+    }
+
+    /// Add a torrent file entry to history (no magnet validation)
+    /// Returns the ID of the inserted/existing entry
+    pub fn add_torrent_entry(&self, uri: &str, name: &str) -> Result<i64> {
         // Sanitize name - remove potentially dangerous characters
         let sanitized_name = sanitize_string(name);
         
@@ -80,17 +85,17 @@ impl Database {
         // Use INSERT OR IGNORE to handle duplicates gracefully
         conn.execute(
             "INSERT OR IGNORE INTO torrent_history (magnet_link, name) VALUES (?1, ?2)",
-            params![magnet_link, sanitized_name],
+            params![uri, sanitized_name],
         )?;
         
         // Get the ID (either newly inserted or existing)
         let id: i64 = conn.query_row(
             "SELECT id FROM torrent_history WHERE magnet_link = ?1",
-            params![magnet_link],
+            params![uri],
             |row| row.get(0),
         )?;
         
-        tracing::info!("Added magnet to history: id={}", id);
+        tracing::info!("Added torrent to history: id={}", id);
         Ok(id)
     }
     

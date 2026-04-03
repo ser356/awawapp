@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { TorrentHistory, CommandResult } from '../types';
 import { formatBytes, formatDate } from '../types';
 import InputText from 'primevue/inputtext';
@@ -14,6 +15,8 @@ const history = ref<TorrentHistory[]>([]);
 const searchQuery = ref('');
 const isLoading = ref(false);
 const errorMessage = ref('');
+
+let unlistenHistoryUpdate: UnlistenFn | null = null;
 
 async function loadHistory() {
   isLoading.value = true;
@@ -88,7 +91,23 @@ function getStatusColor(status: string): string {
   }
 }
 
-onMounted(loadHistory);
+async function setupHistoryListener() {
+  unlistenHistoryUpdate = await listen('history-updated', () => {
+    // Reload history when a new torrent is added
+    loadHistory();
+  });
+}
+
+onMounted(() => {
+  loadHistory();
+  setupHistoryListener();
+});
+
+onUnmounted(() => {
+  if (unlistenHistoryUpdate) {
+    unlistenHistoryUpdate();
+  }
+});
 </script>
 
 <template>

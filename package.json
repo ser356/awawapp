@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:cli": "./scripts/build-cli.sh",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build": "npm run build:cli && tauri build",
+    "package": "./scripts/package-dmg.sh"
   },
   "dependencies": {
     "@primevue/themes": "^4.5.4",

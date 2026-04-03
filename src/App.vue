@@ -160,6 +160,44 @@ async function setupStatsListener() {
   });
 }
 
+// Install CLI handler
+let unlistenInstallCli: UnlistenFn | null = null;
+
+async function installCli() {
+  try {
+    const result = await invoke<CommandResult<string>>('install_cli');
+    if (result.success && result.data) {
+      toast.add({ 
+        severity: 'success', 
+        summary: 'CLI Installed', 
+        detail: result.data, 
+        life: 8000 
+      });
+    } else {
+      toast.add({ 
+        severity: 'error', 
+        summary: 'Installation Failed', 
+        detail: result.error || 'Unknown error', 
+        life: 5000 
+      });
+    }
+  } catch (err) {
+    console.error('CLI install error:', err);
+    toast.add({ 
+      severity: 'error', 
+      summary: 'Error', 
+      detail: 'Failed to install CLI', 
+      life: 5000 
+    });
+  }
+}
+
+async function setupInstallCliListener() {
+  unlistenInstallCli = await listen('install-cli-clicked', () => {
+    installCli();
+  });
+}
+
 // Easter egg: "awawa" sound
 const keyBuffer = ref('');
 
@@ -198,11 +236,13 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(() => {
   setupStatsListener();
+  setupInstallCliListener();
   window.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onUnmounted(() => {
   unlistenStats?.();
+  unlistenInstallCli?.();
   window.removeEventListener('keydown', handleGlobalKeydown);
 });
 </script>
@@ -340,6 +380,7 @@ body {
   flex-direction: column;
   min-height: 100vh;
   padding: 1rem;
+  background: var(--bg-color);
 }
 
 .app-header {
