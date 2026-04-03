@@ -59,9 +59,16 @@ jobs:
       - name: Build sidecar binary
         shell: bash
         run: |
-          cargo build --release --bin awaw --manifest-path src-tauri/Cargo.toml
           TARGET_TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
           mkdir -p src-tauri/binaries
+          # Create placeholder so tauri-build doesn't fail during cargo build
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            touch "src-tauri/binaries/awaw-${TARGET_TRIPLE}.exe"
+          else
+            touch "src-tauri/binaries/awaw-${TARGET_TRIPLE}"
+          fi
+          cargo build --release --bin awaw --manifest-path src-tauri/Cargo.toml
+          # Replace placeholder with the real binary
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cp "src-tauri/target/release/awaw.exe" "src-tauri/binaries/awaw-${TARGET_TRIPLE}.exe"
           else
