@@ -1,4 +1,10 @@
+import { registerMessageCompiler, compile, registerMessageResolver, resolveValue, registerLocaleFallbacker, fallbackWithLocaleChain } from '@intlify/core-base';
 import { createI18n } from 'vue-i18n';
+
+// vue-i18n v12 alpha: sideEffects:false causes tree-shaking of these critical registrations
+registerMessageCompiler(compile);
+registerMessageResolver(resolveValue);
+registerLocaleFallbacker(fallbackWithLocaleChain);
 import en from './en';
 import es from './es';
 import fr from './fr';
@@ -67,8 +73,8 @@ export default i18n;
 
 // Helper to change language
 export function setLanguage(lang: string) {
-  if (isSupportedLocale(lang)) {
-    i18n.global.locale.value = lang;
+  if (supportedLocales.includes(lang)) {
+    i18n.global.locale.value = lang as typeof i18n.global.locale.value;
     localStorage.setItem('awawapp-language', lang);
   }
 }

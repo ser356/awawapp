@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -oP '.{0,60}app\\\\.subtitle.{0,60}' /Users/sergiogarciaseco/Code/awawapp/dist/assets/index-DS1KspUb.js)",
+      "Bash(grep -o '.{0,30}Stream torrents instantly.{0,30}' /Users/sergiogarciaseco/Code/awawapp/dist/assets/index-DS1KspUb.js)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in \\('dependencies','peerDependencies'\\)}, indent=2\\)\\)\")",
+      "Bash(npm view:*)",
+      "Bash(python3 -c \"import json,sys; versions=[v for v in json.load\\(sys.stdin\\) if 'alpha' not in v and 'beta' not in v and 'rc' not in v]; print\\(versions[-1]\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in \\('exports','main','module','sideEffects'\\)}, indent=2\\)\\)\")"
+    ]
+  }
+}
