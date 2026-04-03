@@ -73,7 +73,7 @@ export default i18n;
 
 // Helper to change language
 export function setLanguage(lang: string) {
-  if (supportedLocales.includes(lang)) {
+  if ((supportedLocales as readonly string[]).includes(lang)) {
     i18n.global.locale.value = lang as typeof i18n.global.locale.value;
     localStorage.setItem('awawapp-language', lang);
   }
