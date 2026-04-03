@@ -319,54 +319,53 @@ async fn get_download_dir(state: State<'_, Arc<AppState>>) -> Result<String, Str
     Ok(state.download_dir.to_string_lossy().to_string())
 }
 
-/// Open a URL in VLC
+/// Open a streaming URL in the best available player.
+/// Tries VLC → mpv → system default, transparently.
 #[tauri::command]
-async fn open_in_vlc(url: String) -> Result<CommandResult<()>, String> {
+async fn open_in_player(url: String) -> Result<CommandResult<()>, String> {
     use std::process::Command;
-    
-    // On macOS, use 'open' command with VLC
+
     #[cfg(target_os = "macos")]
-    {
-        match Command::new("open")
-            .args(["-a", "VLC", &url])
-            .spawn()
-        {
-            Ok(_) => Ok(CommandResult::ok(())),
-            Err(e) => {
-                error!("Failed to open VLC: {}", e);
-                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
-            }
-        }
-    }
-    
+    let players: &[(&str, &[&str])] = &[
+        ("open", &["-a", "VLC"]),
+        ("open", &["-a", "mpv"]),
+        ("open", &[]),  // system default
+    ];
+
     #[cfg(target_os = "windows")]
-    {
-        // On Windows, try to find VLC and open with the URL
-        match Command::new("cmd")
-            .args(["/C", "start", "vlc", &url])
-            .spawn()
-        {
-            Ok(_) => Ok(CommandResult::ok(())),
-            Err(e) => {
-                error!("Failed to open VLC: {}", e);
-                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
-            }
-        }
-    }
-    
+    let players: &[(&str, &[&str])] = &[
+        ("cmd", &["/C", "start", "", "vlc"]),
+        ("cmd", &["/C", "start", "", "mpv"]),
+        ("cmd", &["/C", "start", ""]),  // system default
+    ];
+
     #[cfg(target_os = "linux")]
-    {
-        match Command::new("vlc")
+    let players: &[(&str, &[&str])] = &[
+        ("vlc", &[]),
+        ("mpv", &[]),
+        ("xdg-open", &[]),  // system default
+    ];
+
+    for (cmd, args) in players {
+        let result = Command::new(cmd)
+            .args(*args)
             .arg(&url)
-            .spawn()
-        {
-            Ok(_) => Ok(CommandResult::ok(())),
+            .spawn();
+
+        match result {
+            Ok(_) => {
+                info!("Opened stream with: {} {:?}", cmd, args);
+                return Ok(CommandResult::ok(()));
+            }
             Err(e) => {
-                error!("Failed to open VLC: {}", e);
-                Ok(CommandResult::err(&format!("Failed to open VLC: {}", e)))
+                info!("Player {} not available: {}", cmd, e);
+                continue;
             }
         }
     }
+
+    error!("No video player found");
+    Ok(CommandResult::err("No se encontró ningún reproductor de video (VLC, mpv, o predeterminado del sistema)"))
 }
 
 /// Event emitter for real-time stats updates
@@ -542,7 +541,7 @@ pub fn run() {
             delete_from_history,
             delete_torrent,
             get_download_dir,
-            open_in_vlc,
+            open_in_player,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

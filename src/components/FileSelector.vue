@@ -54,12 +54,12 @@ async function streamFile(fileIndex: number) {
     const streamUrl = result.data;
     console.log('Streaming URL:', streamUrl);
     
-    // Open VLC with the stream URL via backend command
-    const vlcResult = await invoke<CommandResult<void>>('open_in_vlc', { url: streamUrl });
-    
-    if (!vlcResult.success) {
-      console.error('VLC open failed:', vlcResult.error);
-      alert(`No se pudo abrir VLC.\n\nURL de streaming:\n${streamUrl}\n\nAbre VLC → Archivo → Abrir ubicación de red`);
+    // Open in best available player (VLC → mpv → system default)
+    const playerResult = await invoke<CommandResult<void>>('open_in_player', { url: streamUrl });
+
+    if (!playerResult.success) {
+      console.error('Player open failed:', playerResult.error);
+      alert(`No se encontró un reproductor.\n\nURL de streaming:\n${streamUrl}\n\nCopia la URL y ábrela en cualquier reproductor.`);
     }
     
     emit('streaming-started');
