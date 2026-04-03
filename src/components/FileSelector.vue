@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import type { TorrentInfo, CommandResult } from '../types';
 import { formatBytes } from '../types';
 import Button from 'primevue/button';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   torrent: TorrentInfo | null;
@@ -47,7 +50,7 @@ async function streamFile(fileIndex: number) {
     
     if (!result.success || !result.data) {
       console.error('Failed to start stream:', result.error);
-      alert('Error al iniciar streaming: ' + (result.error || 'Unknown error'));
+      alert(t('fileSelector.streamError') + ': ' + (result.error || 'Unknown error'));
       return;
     }
     
@@ -59,7 +62,7 @@ async function streamFile(fileIndex: number) {
 
     if (!playerResult.success) {
       console.error('Player open failed:', playerResult.error);
-      alert(`No se encontró un reproductor.\n\nURL de streaming:\n${streamUrl}\n\nCopia la URL y ábrela en cualquier reproductor.`);
+      alert(t('fileSelector.noPlayerFound', { url: streamUrl }));
     }
     
     emit('streaming-started');
@@ -85,12 +88,12 @@ async function streamFile(fileIndex: number) {
           class="close-btn"
         />
       </div>
-      <p class="subtitle">Selecciona un archivo para hacer streaming</p>
-      <p class="total-size">Tamaño total: {{ formatBytes(torrent.total_size) }}</p>
+      <p class="subtitle">{{ t('fileSelector.selectFile') }}</p>
+      <p class="total-size">{{ t('fileSelector.totalSize') }}: {{ formatBytes(torrent.total_size) }}</p>
     </div>
     
     <div v-if="streamableFiles.length === 0" class="no-streamable">
-      <p>No se encontraron archivos de video para streaming.</p>
+      <p>{{ t('fileSelector.noStreamableFiles') }}</p>
     </div>
     
     <div v-else class="file-list">
@@ -107,7 +110,7 @@ async function streamFile(fileIndex: number) {
         <Button
           @click="streamFile(file.index)"
           icon="pi pi-play"
-          label="Stream"
+          :label="t('fileSelector.stream')"
           size="small"
         />
       </div>
@@ -115,7 +118,7 @@ async function streamFile(fileIndex: number) {
     
     <div class="other-files" v-if="torrent.files.length > streamableFiles.length">
       <details>
-        <summary>Otros archivos ({{ torrent.files.length - streamableFiles.length }})</summary>
+        <summary>{{ t('fileSelector.otherFiles') }} ({{ torrent.files.length - streamableFiles.length }})</summary>
         <div class="other-file-list">
           <div
             v-for="file in torrent.files.filter(f => !isStreamableFile(f.path))"

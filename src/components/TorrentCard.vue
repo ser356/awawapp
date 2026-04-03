@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import type { TorrentStats, TorrentInfo, CommandResult } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../types';
 import Button from 'primevue/button';
 import Tag from 'primevue/tag';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   stats: TorrentStats;
@@ -68,7 +71,7 @@ async function playStream(fileIndex: number) {
 
     if (!playerResult.success) {
       console.error('Player open failed:', playerResult.error);
-      alert(`No se encontró un reproductor.\n\nURL de streaming:\n${streamUrl}\n\nCopia la URL y ábrela en cualquier reproductor.`);
+      alert(t('fileSelector.noPlayerFound', { url: streamUrl }));
     }
 
   } catch (err) {
@@ -88,7 +91,7 @@ function togglePause() {
 <template>
   <div class="torrent-card" :class="{ completed: isCompleted, paused: isPaused }">
     <div class="card-header">
-      <h3 class="torrent-name">{{ stats.name || 'Loading...' }}</h3>
+      <h3 class="torrent-name">{{ stats.name || t('torrentCard.loading') }}</h3>
       <Tag :value="stats.state" :severity="tagSeverity" />
     </div>
     
@@ -142,7 +145,7 @@ function togglePause() {
           :title="file.path"
         />
         <span v-if="streamableFiles.length > 3" class="more-files">
-          +{{ streamableFiles.length - 3 }} more
+          {{ t('torrentCard.more', { count: streamableFiles.length - 3 }) }}
         </span>
       </div>
     </div>
@@ -151,14 +154,14 @@ function togglePause() {
       <Button
         @click="togglePause"
         :icon="isPaused ? 'pi pi-play' : 'pi pi-pause'"
-        :label="isPaused ? 'Resume' : 'Pause'"
+        :label="isPaused ? t('torrentCard.resume') : t('torrentCard.pause')"
         size="small"
         outlined
       />
       <Button
         @click="emit('delete', stats.id)"
         icon="pi pi-trash"
-        label="Delete"
+        :label="t('torrentCard.delete')"
         size="small"
         severity="danger"
         outlined

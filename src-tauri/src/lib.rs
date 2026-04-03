@@ -21,9 +21,24 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem, CheckMenuItem};
 use tokio::sync::RwLock;
+use std::sync::Mutex;
 use tracing::{error, info};
+
+/// Stores references to language CheckMenuItems for reliable toggling
+pub struct LanguageMenuItems {
+    items: Vec<(String, CheckMenuItem<tauri::Wry>)>,
+}
+
+impl LanguageMenuItems {
+    fn set_language(&self, lang: &str) {
+        let selected_id = format!("lang_{}", lang);
+        for (id, item) in &self.items {
+            let _ = item.set_checked(*id == selected_id);
+        }
+    }
+}
 
 /// Application state shared across commands
 pub struct AppState {
@@ -327,53 +342,141 @@ async fn get_download_dir(state: State<'_, Arc<AppState>>) -> Result<String, Str
     Ok(state.download_dir.to_string_lossy().to_string())
 }
 
+/// Check if a video player is installed
+#[tauri::command]
+async fn check_player_installed() -> Result<CommandResult<Option<String>>, String> {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    {
+        let apps = ["VLC", "mpv", "IINA"];
+        
+        for app in apps {
+            let check = Command::new("open")
+                .args(["-Ra", app])
+                .output();
+            
+            if let Ok(output) = check {
+                if output.status.success() {
+                    return Ok(CommandResult::ok(Some(app.to_string())));
+                }
+            }
+        }
+        return Ok(CommandResult::ok(None));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, just return None if we can't easily check
+        Ok(CommandResult::ok(None))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let players = ["vlc", "mpv"];
+        
+        for player in players {
+            let which = Command::new("which").arg(player).output();
+            if let Ok(output) = which {
+                if output.status.success() {
+                    return Ok(CommandResult::ok(Some(player.to_string())));
+                }
+            }
+        }
+        Ok(CommandResult::ok(None))
+    }
+}
+
 /// Open a streaming URL in the best available player.
-/// Tries VLC → mpv → system default, transparently.
+/// Tries VLC → mpv → IINA → QuickTime Player
 #[tauri::command]
 async fn open_in_player(url: String) -> Result<CommandResult<()>, String> {
     use std::process::Command;
 
     #[cfg(target_os = "macos")]
-    let players: &[(&str, &[&str])] = &[
-        ("open", &["-a", "VLC"]),
-        ("open", &["-a", "mpv"]),
-        ("open", &[]),  // system default
-    ];
-
-    #[cfg(target_os = "windows")]
-    let players: &[(&str, &[&str])] = &[
-        ("cmd", &["/C", "start", "", "vlc"]),
-        ("cmd", &["/C", "start", "", "mpv"]),
-        ("cmd", &["/C", "start", ""]),  // system default
-    ];
-
-    #[cfg(target_os = "linux")]
-    let players: &[(&str, &[&str])] = &[
-        ("vlc", &[]),
-        ("mpv", &[]),
-        ("xdg-open", &[]),  // system default
-    ];
-
-    for (cmd, args) in players {
-        let result = Command::new(cmd)
-            .args(*args)
-            .arg(&url)
-            .spawn();
-
-        match result {
-            Ok(_) => {
-                info!("Opened stream with: {} {:?}", cmd, args);
-                return Ok(CommandResult::ok(()));
-            }
-            Err(e) => {
-                info!("Player {} not available: {}", cmd, e);
-                continue;
+    {
+        // Check which apps are available first, then open with the first available one
+        // QuickTime Player is included as last resort (comes with macOS)
+        let apps = ["VLC", "mpv", "IINA", "QuickTime Player"];
+        
+        for app in apps {
+            // Check if app exists using 'open -Ra' (doesn't launch, just checks)
+            let check = Command::new("open")
+                .args(["-Ra", app])
+                .output();
+            
+            if let Ok(output) = check {
+                if output.status.success() {
+                    // App exists, open the URL with it
+                    let result = Command::new("open")
+                        .args(["-a", app])
+                        .arg(&url)
+                        .spawn();
+                    
+                    if result.is_ok() {
+                        info!("Opened stream with: {}", app);
+                        return Ok(CommandResult::ok(()));
+                    }
+                }
             }
         }
+        
+        // No player found at all
+        error!("No video player found on macOS");
+        return Ok(CommandResult::err("No se encontró ningún reproductor de video. Instala VLC o mpv."));
     }
 
-    error!("No video player found");
-    Ok(CommandResult::err("No se encontró ningún reproductor de video (VLC, mpv, o predeterminado del sistema)"))
+    #[cfg(target_os = "windows")]
+    {
+        // Try Windows Media Player as fallback
+        let players = ["vlc", "mpv", "wmplayer"];
+
+        for player in players {
+            let result = Command::new("cmd")
+                .args(["/C", "start", "", player])
+                .arg(&url)
+                .spawn();
+            
+            if result.is_ok() {
+                info!("Opened stream with: {}", player);
+                return Ok(CommandResult::ok(()));
+            }
+        }
+        
+        error!("No video player found on Windows");
+        return Ok(CommandResult::err("No se encontró ningún reproductor de video. Instala VLC o mpv."));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let players = ["vlc", "mpv", "celluloid", "totem"];
+        
+        for player in players {
+            // Check if command exists
+            let which = Command::new("which").arg(player).output();
+            if let Ok(output) = which {
+                if output.status.success() {
+                    if Command::new(player).arg(&url).spawn().is_ok() {
+                        info!("Opened stream with: {}", player);
+                        return Ok(CommandResult::ok(()));
+                    }
+                }
+            }
+        }
+        
+        error!("No video player found on Linux");
+        Ok(CommandResult::err("No se encontró ningún reproductor de video. Instala VLC o mpv."))
+    }
+}
+
+/// Set the language menu checkmarks to match the current language
+#[tauri::command]
+async fn set_menu_language(app: AppHandle, lang: String) -> Result<(), String> {
+    if let Some(menu_items) = app.try_state::<Mutex<LanguageMenuItems>>() {
+        let items = menu_items.lock().unwrap();
+        items.set_language(&lang);
+    }
+    Ok(())
 }
 
 /// Event emitter for real-time stats updates
@@ -415,6 +518,14 @@ pub fn run() {
                 
                 let app_handle = app.handle();
                 
+                // Detect system language to set default checkmark
+                let system_lang = std::env::var("LANG")
+                    .unwrap_or_else(|_| "en".to_string())
+                    .split(&['_', '.', '-'][..])
+                    .next()
+                    .unwrap_or("en")
+                    .to_lowercase();
+                
                 // App menu (macOS standard) with Check for Updates
                 let about = PredefinedMenuItem::about(app_handle, Some("About awawapp"), Some(
                     AboutMetadataBuilder::new()
@@ -422,6 +533,66 @@ pub fn run() {
                         .build()
                 ))?;
                 let install_cli_item = MenuItem::with_id(app_handle, "install_cli", "Install CLI...", true, None::<&str>)?;
+                
+                // Language submenu with native checkmarks - no flags
+                let lang_en = CheckMenuItem::with_id(app_handle, "lang_en", "English", true, system_lang == "en", None::<&str>)?;
+                let lang_es = CheckMenuItem::with_id(app_handle, "lang_es", "Español", true, system_lang == "es", None::<&str>)?;
+                let lang_fr = CheckMenuItem::with_id(app_handle, "lang_fr", "Français", true, system_lang == "fr", None::<&str>)?;
+                let lang_de = CheckMenuItem::with_id(app_handle, "lang_de", "Deutsch", true, system_lang == "de", None::<&str>)?;
+                let lang_it = CheckMenuItem::with_id(app_handle, "lang_it", "Italiano", true, system_lang == "it", None::<&str>)?;
+                let lang_pt = CheckMenuItem::with_id(app_handle, "lang_pt", "Português", true, system_lang == "pt", None::<&str>)?;
+                let lang_ru = CheckMenuItem::with_id(app_handle, "lang_ru", "Русский", true, system_lang == "ru", None::<&str>)?;
+                let lang_ja = CheckMenuItem::with_id(app_handle, "lang_ja", "日本語", true, system_lang == "ja", None::<&str>)?;
+                let lang_ko = CheckMenuItem::with_id(app_handle, "lang_ko", "한국어", true, system_lang == "ko", None::<&str>)?;
+                let lang_zh = CheckMenuItem::with_id(app_handle, "lang_zh", "中文", true, system_lang == "zh", None::<&str>)?;
+                let lang_nl = CheckMenuItem::with_id(app_handle, "lang_nl", "Nederlands", true, system_lang == "nl", None::<&str>)?;
+                let lang_sv = CheckMenuItem::with_id(app_handle, "lang_sv", "Svenska", true, system_lang == "sv", None::<&str>)?;
+                let lang_pl = CheckMenuItem::with_id(app_handle, "lang_pl", "Polski", true, system_lang == "pl", None::<&str>)?;
+                let lang_tr = CheckMenuItem::with_id(app_handle, "lang_tr", "Türkçe", true, system_lang == "tr", None::<&str>)?;
+                let lang_ar = CheckMenuItem::with_id(app_handle, "lang_ar", "العربية", true, system_lang == "ar", None::<&str>)?;
+                // Store references for reliable toggling from event handler and commands
+                let lang_menu_items = vec![
+                    ("lang_en".to_string(), lang_en.clone()),
+                    ("lang_es".to_string(), lang_es.clone()),
+                    ("lang_fr".to_string(), lang_fr.clone()),
+                    ("lang_de".to_string(), lang_de.clone()),
+                    ("lang_it".to_string(), lang_it.clone()),
+                    ("lang_pt".to_string(), lang_pt.clone()),
+                    ("lang_ru".to_string(), lang_ru.clone()),
+                    ("lang_ja".to_string(), lang_ja.clone()),
+                    ("lang_ko".to_string(), lang_ko.clone()),
+                    ("lang_zh".to_string(), lang_zh.clone()),
+                    ("lang_nl".to_string(), lang_nl.clone()),
+                    ("lang_sv".to_string(), lang_sv.clone()),
+                    ("lang_pl".to_string(), lang_pl.clone()),
+                    ("lang_tr".to_string(), lang_tr.clone()),
+                    ("lang_ar".to_string(), lang_ar.clone()),
+                ];
+
+                // Clone for the event handler closure
+                let lang_menu_items_for_handler = lang_menu_items.clone();
+
+                // Store in Tauri state for set_menu_language command
+                app.manage(Mutex::new(LanguageMenuItems { items: lang_menu_items }));
+
+                let language_menu = Submenu::with_items(app_handle, "Language", true, &[
+                    &lang_en,
+                    &lang_es,
+                    &lang_fr,
+                    &lang_de,
+                    &lang_it,
+                    &lang_pt,
+                    &lang_ru,
+                    &lang_ja,
+                    &lang_ko,
+                    &lang_zh,
+                    &lang_nl,
+                    &lang_sv,
+                    &lang_pl,
+                    &lang_tr,
+                    &lang_ar,
+                ])?;
+                
                 let services = PredefinedMenuItem::services(app_handle, None)?;
                 let hide = PredefinedMenuItem::hide(app_handle, None)?;
                 let hide_others = PredefinedMenuItem::hide_others(app_handle, None)?;
@@ -431,6 +602,7 @@ pub fn run() {
                     &about,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &install_cli_item,
+                    &language_menu,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &services,
                     &PredefinedMenuItem::separator(app_handle)?,
@@ -475,8 +647,15 @@ pub fn run() {
                 
                 // Handle menu events
                 app.on_menu_event(move |app, event| {
-                    if event.id().as_ref() == "install_cli" {
-                        // Emit event to frontend to trigger CLI installation
+                    let event_id = event.id().as_ref();
+
+                    if let Some(lang_code) = event_id.strip_prefix("lang_") {
+                        // Use direct references to set exactly one item checked
+                        for (id, item) in &lang_menu_items_for_handler {
+                            let _ = item.set_checked(id == event_id);
+                        }
+                        let _ = app.emit("language-changed", lang_code);
+                    } else if event_id == "install_cli" {
                         let _ = app.emit("install-cli-clicked", ());
                     }
                 });
@@ -560,6 +739,8 @@ pub fn run() {
             delete_torrent,
             get_download_dir,
             open_in_player,
+            check_player_installed,
+            set_menu_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

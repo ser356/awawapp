@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
@@ -14,7 +15,9 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 
 import type { TorrentInfo, TorrentStats, CommandResult } from './types';
+import { setLanguage, getCurrentLanguage } from './locales';
 
+const { t } = useI18n();
 const toast = useToast();
 
 // State
@@ -30,6 +33,26 @@ let unlistenStats: UnlistenFn | null = null;
 
 // Handle new torrent added
 function onTorrentAdded(info: TorrentInfo) {
+  // Check if torrent already exists (by ID or name)
+  const existingById = activeTorrents.value.get(info.id);
+  const existingByName = Array.from(activeTorrents.value.values()).find(
+    t => t.info.name === info.name
+  );
+  
+  if (existingById || existingByName) {
+    // Torrent already active, just show file selector
+    const existing = existingById || existingByName;
+    selectedTorrent.value = existing!.info;
+    showFileSelector.value = true;
+    toast.add({
+      severity: 'info',
+      summary: t('torrents.alreadyActive'),
+      detail: t('torrents.showingExisting'),
+      life: 3000
+    });
+    return;
+  }
+  
   // Show file selector for new torrent
   selectedTorrent.value = info;
   showFileSelector.value = true;
@@ -108,14 +131,14 @@ async function confirmDelete() {
     
     if (result.success) {
       activeTorrents.value.delete(id);
-      toast.add({ severity: 'success', summary: 'Deleted', detail: 'Torrent removed', life: 3000 });
+      toast.add({ severity: 'success', summary: t('notifications.deleted'), detail: t('notifications.torrentRemoved'), life: 3000 });
     } else {
       console.error('Delete failed:', result.error);
-      onError(result.error || 'Failed to delete torrent');
+      onError(result.error || t('notifications.failedToDelete'));
     }
   } catch (err) {
     console.error('Delete error:', err);
-    onError('Failed to delete torrent');
+    onError(t('notifications.failedToDelete'));
   }
 }
 
@@ -138,7 +161,7 @@ function loadMagnetFromHistory(magnetLink: string) {
 
 // Handle errors
 function onError(message: string) {
-  toast.add({ severity: 'error', summary: 'Error', detail: message, life: 5000 });
+  toast.add({ severity: 'error', summary: t('notifications.error'), detail: message, life: 5000 });
   errorMessage.value = message;
   setTimeout(() => {
     errorMessage.value = '';
@@ -162,6 +185,7 @@ async function setupStatsListener() {
 
 // Install CLI handler
 let unlistenInstallCli: UnlistenFn | null = null;
+let unlistenLanguageChanged: UnlistenFn | null = null;
 
 async function installCli() {
   try {
@@ -169,14 +193,14 @@ async function installCli() {
     if (result.success && result.data) {
       toast.add({ 
         severity: 'success', 
-        summary: 'CLI Installed', 
+        summary: t('notifications.cliInstalled'), 
         detail: result.data, 
         life: 8000 
       });
     } else {
       toast.add({ 
         severity: 'error', 
-        summary: 'Installation Failed', 
+        summary: t('notifications.installationFailed'), 
         detail: result.error || 'Unknown error', 
         life: 5000 
       });
@@ -185,8 +209,8 @@ async function installCli() {
     console.error('CLI install error:', err);
     toast.add({ 
       severity: 'error', 
-      summary: 'Error', 
-      detail: 'Failed to install CLI', 
+      summary: t('notifications.error'), 
+      detail: t('notifications.failedToInstallCli'), 
       life: 5000 
     });
   }
@@ -195,6 +219,13 @@ async function installCli() {
 async function setupInstallCliListener() {
   unlistenInstallCli = await listen('install-cli-clicked', () => {
     installCli();
+  });
+}
+
+// Language change listener (from native menu)
+async function setupLanguageListener() {
+  unlistenLanguageChanged = await listen<string>('language-changed', (event) => {
+    setLanguage(event.payload);
   });
 }
 
@@ -227,22 +258,50 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       toast.add({
         severity: 'info',
         summary: '🐾 awawa!',
-        detail: 'You found the secret!',
+        detail: t('notifications.secret'),
         life: 2000
       });
     }
   }
 }
 
-onMounted(() => {
+// Check for video player on startup
+async function checkVideoPlayer() {
+  try {
+    const result = await invoke<CommandResult<string | null>>('check_player_installed');
+    if (result.success && result.data === null) {
+      // No player found, show warning
+      toast.add({
+        severity: 'warn',
+        summary: t('notifications.noPlayerDetected'),
+        detail: t('notifications.installPlayerHint'),
+        life: 10000
+      });
+    }
+  } catch (err) {
+    console.error('Failed to check player:', err);
+  }
+}
+
+onMounted(async () => {
   setupStatsListener();
   setupInstallCliListener();
+  setupLanguageListener();
+  checkVideoPlayer();
   window.addEventListener('keydown', handleGlobalKeydown);
+  
+  // Sync menu language checkmarks with stored preference
+  try {
+    await invoke('set_menu_language', { lang: getCurrentLanguage() });
+  } catch (err) {
+    console.error('Failed to sync menu language:', err);
+  }
 });
 
 onUnmounted(() => {
   unlistenStats?.();
   unlistenInstallCli?.();
+  unlistenLanguageChanged?.();
   window.removeEventListener('keydown', handleGlobalKeydown);
 });
 </script>
@@ -258,7 +317,7 @@ onUnmounted(() => {
         <img src="/mascot.png" alt="awawapp mascot" class="mascot-logo" />
         <h1>awawapp</h1>
       </div>
-      <p class="subtitle">Stream torrents instantly</p>
+      <p class="subtitle">{{ t('app.subtitle') }}</p>
     </header>
     
     <!-- Main Content -->
@@ -292,23 +351,23 @@ onUnmounted(() => {
         <Dialog
           v-model:visible="showDeleteDialog"
           modal
-          header="Delete Torrent?"
+          :header="t('dialogs.deleteTitle')"
           :style="{ width: '400px' }"
         >
-          <p class="confirm-text">This will remove the torrent from the list. Downloaded files will not be deleted.</p>
+          <p class="confirm-text">{{ t('dialogs.deleteMessage') }}</p>
           <template #footer>
-            <Button label="Cancel" severity="secondary" outlined @click="cancelDelete" />
-            <Button label="Delete" severity="danger" @click="confirmDelete" />
+            <Button :label="t('dialogs.cancel')" severity="secondary" outlined @click="cancelDelete" />
+            <Button :label="t('dialogs.delete')" severity="danger" @click="confirmDelete" />
           </template>
         </Dialog>
         
         <!-- Active Torrents -->
         <section class="torrents-section">
-          <h2 v-if="activeTorrents.size > 0">Active Downloads</h2>
+          <h2 v-if="activeTorrents.size > 0">{{ t('torrents.activeDownloads') }}</h2>
           
           <div v-if="activeTorrents.size === 0" class="empty-state">
-            <p>No active torrents</p>
-            <p class="hint">Paste a magnet link above to get started</p>
+            <p>{{ t('torrents.noActive') }}</p>
+            <p class="hint">{{ t('torrents.hint') }}</p>
           </div>
           
           <TorrentCard
@@ -480,11 +539,20 @@ body {
   color: var(--text-muted) !important;
   background: transparent !important;
   border: none !important;
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  box-shadow: none !important;
 }
 
-.p-dialog-header-close:hover {
+.p-dialog-header-close .pi {
+  font-size: 0.7rem !important;
+}
+
+.p-dialog-header-close:hover,
+.p-dialog-header-close:focus {
   color: var(--text-color) !important;
-  background: var(--hover-bg) !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .p-dialog-content {
@@ -501,6 +569,15 @@ body {
 
 .p-dialog-mask {
   background: rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Remove PrimeVue blue focus rings */
+.p-button:focus,
+.p-button-icon-only:focus,
+.p-button-text:focus,
+.p-button-rounded:focus {
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 .confirm-text {

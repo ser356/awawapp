@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import type { CommandResult, TorrentInfo } from '../types';
 import { isValidMagnetLink } from '../types';
 import InputText from 'primevue/inputtext';
 import Button from 'primevue/button';
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   (e: 'torrent-added', info: TorrentInfo): void;
@@ -31,7 +34,7 @@ async function addMagnet() {
   const sanitizedLink = sanitizeInput(magnetLink.value);
 
   if (!isValidMagnetLink(sanitizedLink)) {
-    errorMessage.value = 'Invalid magnet link format';
+    errorMessage.value = t('magnetInput.invalidMagnet');
     return;
   }
 
@@ -51,7 +54,7 @@ async function addMagnet() {
       emit('error', errorMessage.value);
     }
   } catch (err) {
-    errorMessage.value = 'Connection error. Please try again.';
+    errorMessage.value = t('magnetInput.connectionError');
     emit('error', errorMessage.value);
     console.error('Add magnet error:', err);
   } finally {
@@ -61,11 +64,11 @@ async function addMagnet() {
 
 async function addTorrentFile(file: File) {
   if (!file.name.endsWith('.torrent')) {
-    errorMessage.value = 'Only .torrent files are supported';
+    errorMessage.value = t('magnetInput.onlyTorrentFiles');
     return;
   }
   if (file.size > 10 * 1024 * 1024) {
-    errorMessage.value = 'Torrent file is too large (max 10 MB)';
+    errorMessage.value = t('magnetInput.fileTooLarge');
     return;
   }
 
@@ -83,11 +86,11 @@ async function addTorrentFile(file: File) {
     if (result.success && result.data) {
       emit('torrent-added', result.data);
     } else {
-      errorMessage.value = result.error || 'Failed to load torrent file';
+      errorMessage.value = result.error || t('magnetInput.failedToLoadFile');
       emit('error', errorMessage.value);
     }
   } catch {
-    errorMessage.value = 'Failed to read torrent file';
+    errorMessage.value = t('magnetInput.failedToReadFile');
     emit('error', errorMessage.value);
   } finally {
     isLoading.value = false;
@@ -129,7 +132,7 @@ function handlePaste(event: ClipboardEvent) {
     <div class="input-container">
       <InputText
         v-model="magnetLink"
-        placeholder="Paste magnet link here..."
+        :placeholder="t('magnetInput.placeholder')"
         @paste="handlePaste"
         @keyup.enter="addMagnet"
         :disabled="isLoading"
@@ -141,7 +144,7 @@ function handlePaste(event: ClipboardEvent) {
         @click="addMagnet"
         :disabled="!isValidInput || isLoading"
         :loading="isLoading"
-        label="Add Torrent"
+        :label="t('magnetInput.addTorrent')"
         icon="pi pi-plus"
         class="add-button"
       />
@@ -149,11 +152,11 @@ function handlePaste(event: ClipboardEvent) {
         @click="openFilePicker"
         :disabled="isLoading"
         icon="pi pi-file"
-        label=".torrent"
+        :label="t('magnetInput.torrentFile')"
         severity="secondary"
         outlined
         class="file-button"
-        title="Import .torrent file"
+        :title="t('magnetInput.torrentFile')"
       />
     </div>
 

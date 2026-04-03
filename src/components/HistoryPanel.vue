@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { TorrentHistory, CommandResult } from '../types';
 import { formatBytes, formatDate } from '../types';
 import InputText from 'primevue/inputtext';
 import Button from 'primevue/button';
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   (e: 'load-magnet', magnetLink: string): void;
@@ -30,11 +33,11 @@ async function loadHistory() {
     if (result.success && result.data) {
       history.value = result.data;
     } else {
-      errorMessage.value = result.error || 'Failed to load history';
+      errorMessage.value = result.error || t('historyPanel.failedToLoad');
     }
   } catch (err) {
     console.error('Load history error:', err);
-    errorMessage.value = 'Failed to connect';
+    errorMessage.value = t('historyPanel.failedToConnect');
   } finally {
     isLoading.value = false;
   }
@@ -82,6 +85,11 @@ function loadMagnet(magnetLink: string) {
   emit('load-magnet', magnetLink);
 }
 
+// Check if entry is from a .torrent file (can't be restored)
+function isFromFile(magnetLink: string): boolean {
+  return magnetLink.startsWith('file:');
+}
+
 function getStatusColor(status: string): string {
   switch (status.toLowerCase()) {
     case 'completed': return 'var(--success-color, #8fb573)';
@@ -113,7 +121,7 @@ onUnmounted(() => {
 <template>
   <div class="history-panel">
     <div class="history-header">
-      <h3>History</h3>
+      <h3>{{ t('historyPanel.title') }}</h3>
       <Button
         @click="loadHistory"
         :loading="isLoading"
@@ -128,7 +136,7 @@ onUnmounted(() => {
     <div class="search-box">
       <InputText
         v-model="searchQuery"
-        placeholder="Search history..."
+        :placeholder="t('historyPanel.searchPlaceholder')"
         @input="searchHistory"
         maxlength="100"
         size="small"
@@ -136,12 +144,12 @@ onUnmounted(() => {
       />
     </div>
     
-    <div v-if="isLoading && !history.length" class="loading">Loading...</div>
+    <div v-if="isLoading && !history.length" class="loading">{{ t('historyPanel.loading') }}</div>
     
     <div v-else-if="errorMessage" class="error">{{ errorMessage }}</div>
     
     <div v-else-if="history.length === 0" class="empty">
-      No torrents in history
+      {{ t('historyPanel.empty') }}
     </div>
     
     <div v-else class="history-list">
@@ -172,7 +180,8 @@ onUnmounted(() => {
             text
             rounded
             size="small"
-            v-tooltip.left="'Load again'"
+            :disabled="isFromFile(item.magnet_link)"
+            v-tooltip.left="isFromFile(item.magnet_link) ? t('historyPanel.cannotRestoreFile') : t('historyPanel.loadAgain')"
           />
           <Button
             @click="deleteFromHistory(item.id)"
@@ -181,7 +190,7 @@ onUnmounted(() => {
             rounded
             size="small"
             severity="danger"
-            v-tooltip.left="'Delete'"
+            v-tooltip.left="t('historyPanel.deleteTooltip')"
           />
         </div>
       </div>
