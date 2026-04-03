@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Sidecar binaries (built during CI)
+src-tauri/binaries/awaw-*

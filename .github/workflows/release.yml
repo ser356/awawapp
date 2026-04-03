@@ -56,6 +56,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build sidecar binary
+        shell: bash
+        run: |
+          cargo build --release --bin awaw --manifest-path src-tauri/Cargo.toml
+          TARGET_TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p src-tauri/binaries
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp "src-tauri/target/release/awaw.exe" "src-tauri/binaries/awaw-${TARGET_TRIPLE}.exe"
+          else
+            cp "src-tauri/target/release/awaw" "src-tauri/binaries/awaw-${TARGET_TRIPLE}"
+          fi
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
