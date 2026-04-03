@@ -68,6 +68,10 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      - name: Repackage DMG with quarantine fix and README
+        if: matrix.platform == 'macos-latest'
+        run: bash scripts/package-dmg.sh
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
