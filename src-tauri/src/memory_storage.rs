@@ -1,12 +1,11 @@
-//! In-memory torrent storage backend.
+//! In-memory torrent storage backend with LZ4 compression (zram-style).
 //!
-//! Pieces are stored in sparse RAM pages and never written to disk.
-//! This replicates Stremio-style ephemeral streaming: no storage usage,
-//! all data is freed when the torrent is dropped.
+//! Pieces are stored in sparse, **compressed** RAM pages and never written to disk.
+//! Each 1 MiB page is LZ4-compressed before being stored in the HashMap,
+//! similar to how Linux zram compresses swap pages in memory.
 //!
-//! Implementation: a HashMap<(file_id, page_index), Vec<u8>> where each
-//! page is PAGE_SIZE bytes. Pages are lazily allocated on first write,
-//! so a 100 GB torrent only uses RAM proportional to what was downloaded.
+//! For incompressible data (e.g. already-compressed video) the overhead is
+//! minimal (~1-2%). For compressible data the savings can reach 50-70%.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -46,11 +45,40 @@ impl StorageFactory for InMemoryStorageFactory {
     }
 }
 
+// ─── Compressed page ────────────────────────────────────────────────────────
+
+/// A page stored in LZ4-compressed form.
+struct CompressedPage {
+    /// LZ4-compressed bytes of the full PAGE_SIZE page.
+    data: Vec<u8>,
+}
+
+impl CompressedPage {
+    /// Compress a raw page into LZ4.
+    fn compress(raw: &[u8]) -> Self {
+        Self {
+            data: lz4_flex::compress_prepend_size(raw),
+        }
+    }
+
+    /// Decompress back to the original PAGE_SIZE bytes.
+    fn decompress(&self) -> anyhow::Result<Vec<u8>> {
+        lz4_flex::decompress_size_prepended(&self.data)
+            .map_err(|e| anyhow::anyhow!("LZ4 decompress failed: {e}"))
+    }
+
+    /// Bytes actually used in RAM (the compressed representation).
+    #[allow(dead_code)]
+    fn compressed_size(&self) -> usize {
+        self.data.len()
+    }
+}
+
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 pub struct InMemoryStorage {
-    /// Sparse page map: (file_id, page_index) → page bytes.
-    pages: Arc<RwLock<HashMap<(usize, u64), Vec<u8>>>>,
+    /// Sparse page map: (file_id, page_index) → LZ4-compressed page.
+    pages: Arc<RwLock<HashMap<(usize, u64), CompressedPage>>>,
 }
 
 impl InMemoryStorage {
@@ -81,11 +109,12 @@ impl TorrentStorage for InMemoryStorage {
             let page_off = (cur % PAGE_SIZE) as usize;
             let chunk = (PAGE_SIZE as usize - page_off).min(remaining);
 
-            let page = pages
+            let compressed = pages
                 .get(&(file_id, page_idx))
                 .ok_or_else(|| anyhow::anyhow!("piece not downloaded yet (file={file_id}, page={page_idx})"))?;
 
-            buf[buf_pos..buf_pos + chunk].copy_from_slice(&page[page_off..page_off + chunk]);
+            let raw = compressed.decompress()?;
+            buf[buf_pos..buf_pos + chunk].copy_from_slice(&raw[page_off..page_off + chunk]);
             buf_pos += chunk;
             cur += chunk as u64;
             remaining -= chunk;
@@ -104,11 +133,18 @@ impl TorrentStorage for InMemoryStorage {
             let page_off = (cur % PAGE_SIZE) as usize;
             let chunk = (PAGE_SIZE as usize - page_off).min(remaining);
 
-            let page = pages
-                .entry((file_id, page_idx))
-                .or_insert_with(|| vec![0u8; PAGE_SIZE as usize]);
+            // Decompress existing page or create a fresh zeroed one.
+            let mut raw = if let Some(existing) = pages.get(&(file_id, page_idx)) {
+                existing.decompress()?
+            } else {
+                vec![0u8; PAGE_SIZE as usize]
+            };
 
-            page[page_off..page_off + chunk].copy_from_slice(&buf[buf_pos..buf_pos + chunk]);
+            raw[page_off..page_off + chunk].copy_from_slice(&buf[buf_pos..buf_pos + chunk]);
+
+            // Re-compress and store.
+            pages.insert((file_id, page_idx), CompressedPage::compress(&raw));
+
             buf_pos += chunk;
             cur += chunk as u64;
             remaining -= chunk;
