@@ -17,20 +17,26 @@ import ar from './ar';
 
 const supportedLocales = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko', 'zh', 'nl', 'sv', 'pl', 'tr', 'ar'] as const;
 
+type SupportedLocale = typeof supportedLocales[number];
+
+function isSupportedLocale(lang: string): lang is SupportedLocale {
+  return (supportedLocales as readonly string[]).includes(lang);
+}
+
 // Get saved language or detect from browser
-function getDefaultLocale(): string {
+function getDefaultLocale(): SupportedLocale {
   // Check localStorage first
   const saved = localStorage.getItem('awawapp-language');
-  if (saved && supportedLocales.includes(saved)) {
+  if (saved && isSupportedLocale(saved)) {
     return saved;
   }
-  
+
   // Detect from browser
   const browserLang = navigator.language.split('-')[0];
-  if (supportedLocales.includes(browserLang)) {
+  if (isSupportedLocale(browserLang)) {
     return browserLang;
   }
-  
+
   return 'en';
 }
 
@@ -61,8 +67,8 @@ export default i18n;
 
 // Helper to change language
 export function setLanguage(lang: string) {
-  if (supportedLocales.includes(lang)) {
-    i18n.global.locale.value = lang as typeof supportedLocales[number];
+  if (isSupportedLocale(lang)) {
+    i18n.global.locale.value = lang;
     localStorage.setItem('awawapp-language', lang);
   }
 }
