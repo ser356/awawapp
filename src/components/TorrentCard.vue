@@ -47,30 +47,30 @@ const streamableFiles = computed(() => {
   );
 });
 
-async function playInVlc(fileIndex: number) {
+async function playStream(fileIndex: number) {
   try {
     // Start streaming - this sets up the file for download and returns URL
     const result = await invoke<CommandResult<string>>('start_stream', {
       torrentId: props.stats.id,
       fileIndex
     });
-    
+
     if (!result.success || !result.data) {
       console.error('Failed to start stream:', result.error);
       return;
     }
-    
+
     const streamUrl = result.data;
-    console.log('Opening stream URL in VLC:', streamUrl);
-    
-    // Open VLC via backend command
-    const vlcResult = await invoke<CommandResult<void>>('open_in_vlc', { url: streamUrl });
-    
-    if (!vlcResult.success) {
-      console.error('VLC open failed:', vlcResult.error);
-      alert(`URL de streaming:\n\n${streamUrl}\n\nAbre VLC → Archivo → Abrir ubicación de red`);
+    console.log('Opening stream URL:', streamUrl);
+
+    // Open in best available player (VLC → mpv → system default)
+    const playerResult = await invoke<CommandResult<void>>('open_in_player', { url: streamUrl });
+
+    if (!playerResult.success) {
+      console.error('Player open failed:', playerResult.error);
+      alert(`No se encontró un reproductor.\n\nURL de streaming:\n${streamUrl}\n\nCopia la URL y ábrela en cualquier reproductor.`);
     }
-    
+
   } catch (err) {
     console.error('Failed to stream:', err);
   }
@@ -128,12 +128,12 @@ function togglePause() {
     
     <!-- Streamable files (if torrent info available) -->
     <div v-if="streamableFiles.length > 0" class="stream-section">
-      <p class="stream-label">Stream in VLC:</p>
+      <p class="stream-label">Stream:</p>
       <div class="stream-files">
         <Button
           v-for="file in streamableFiles.slice(0, 3)"
           :key="file.index"
-          @click="playInVlc(file.index)"
+          @click="playStream(file.index)"
           :label="file.path.split('/').pop()"
           icon="pi pi-play"
           size="small"

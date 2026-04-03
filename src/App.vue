@@ -218,7 +218,7 @@ onUnmounted(() => {
         <img src="/mascot.png" alt="awawapp mascot" class="mascot-logo" />
         <h1>awawapp</h1>
       </div>
-      <p class="subtitle">Stream torrents to VLC</p>
+      <p class="subtitle">Stream torrents instantly</p>
     </header>
     
     <!-- Main Content -->
