@@ -116,8 +116,8 @@ async fn add_magnet(
             Ok(CommandResult::ok(info))
         }
         Err(e) => {
-            error!("Failed to add magnet: {}", e);
-            Ok(CommandResult::err("Failed to add torrent. Please check the magnet link."))
+            error!("Failed to add magnet: {:#}", e);
+            Ok(CommandResult::err(&format!("Failed to add torrent: {:#}", e)))
         }
     }
 }
@@ -148,8 +148,8 @@ async fn add_torrent_file(
             Ok(CommandResult::ok(info))
         }
         Err(e) => {
-            error!("Failed to add torrent file: {}", e);
-            Ok(CommandResult::err("Failed to load torrent file"))
+            error!("Failed to add torrent file: {:#}", e);
+            Ok(CommandResult::err(&format!("Failed to load torrent file: {:#}", e)))
         }
     }
 }
@@ -482,10 +482,10 @@ async fn set_menu_language(app: AppHandle, lang: String) -> Result<(), String> {
 /// Event emitter for real-time stats updates
 async fn start_stats_emitter(app: AppHandle, state: Arc<AppState>) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-    
+
     loop {
         interval.tick().await;
-        
+
         let engine_guard = state.engine.read().await;
         if let Some(engine) = engine_guard.as_ref() {
             if let Ok(stats) = engine.get_all_stats().await {
@@ -493,6 +493,23 @@ async fn start_stats_emitter(app: AppHandle, state: Arc<AppState>) {
                 if let Err(e) = app.emit("torrent-stats", &stats) {
                     error!("Failed to emit stats: {}", e);
                 }
+            }
+        }
+    }
+}
+
+/// Periodically checks that the HTTP API server is alive and restarts it if
+/// it has crashed.  Runs every 5 seconds.
+async fn start_http_watchdog(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        let engine_guard = state.engine.read().await;
+        if let Some(engine) = engine_guard.as_ref() {
+            if let Err(e) = engine.ensure_http_server_alive().await {
+                error!("HTTP watchdog: failed to restart server: {}", e);
             }
         }
     }
@@ -702,19 +719,25 @@ pub fn run() {
                     max_connections: 100,
                     dht_enabled: true,
                 };
-                
+
                 match TorrentEngine::new(config).await {
                     Ok(engine) => {
                         let engine = Arc::new(engine);
-                        
+
                         // Store engine in state
                         let mut engine_guard = state_clone.engine.write().await;
                         *engine_guard = Some(engine);
                         drop(engine_guard);
-                        
+
                         info!("Torrent engine initialized successfully");
-                        
-                        // Start stats emitter
+
+                        // Launch watchdog for the HTTP API server
+                        let watchdog_state = state_clone.clone();
+                        tokio::spawn(async move {
+                            start_http_watchdog(watchdog_state).await;
+                        });
+
+                        // Start stats emitter (runs forever)
                         start_stats_emitter(app_handle_clone, state_clone).await;
                     }
                     Err(e) => {

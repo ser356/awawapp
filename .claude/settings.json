@@ -6,7 +6,12 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in \\('dependencies','peerDependencies'\\)}, indent=2\\)\\)\")",
       "Bash(npm view:*)",
       "Bash(python3 -c \"import json,sys; versions=[v for v in json.load\\(sys.stdin\\) if 'alpha' not in v and 'beta' not in v and 'rc' not in v]; print\\(versions[-1]\\)\")",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in \\('exports','main','module','sideEffects'\\)}, indent=2\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in \\('exports','main','module','sideEffects'\\)}, indent=2\\)\\)\")",
+      "Bash(grep -r \"error\\\\|Error\\\\|warn\\\\|panic\\\\|disconnect\\\\|connection\\\\|timeout\\\\|retry\" /Users/sergiogarciaseco/Code/awawapp/src-tauri/src/*.rs)",
+      "Bash(grep -r \"tracing\\\\|info!\\\\|error!\\\\|warn!\" /Users/sergiogarciaseco/Code/awawapp/src-tauri/src/*.rs)",
+      "Bash(grep -r \"start_stream\\\\|get_stream_url\\\\|HTTP API\" /Users/sergiogarciaseco/Code/awawapp/src-tauri/src/*.rs)",
+      "Bash(grep -rn \"invoke\\\\|fetch\\\\|XMLHttpRequest\\\\|abort\\\\|error\\\\|catch\" /Users/sergiogarciaseco/Code/awawapp/src/components/*.vue)",
+      "Bash(cargo build:*)"
     ]
   }
 }

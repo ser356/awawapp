@@ -8,7 +8,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use librqbit::storage::{BoxStorageFactory, StorageFactory, StorageFactoryExt, TorrentStorage};
 use librqbit::{ManagedTorrentShared, TorrentMetadata};
@@ -18,20 +20,47 @@ const PAGE_SIZE: u64 = 1024 * 1024;
 
 /// Maximum buffer size in bytes (1 GiB default).
 /// Adjust based on available RAM. For 4K streaming, 512MB-1GB is reasonable.
-const MAX_BUFFER_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_BUFFER_BYTES: usize = 2048 * 1024 * 1024;
 
 /// Maximum number of pages to keep in memory.
 const MAX_PAGES: usize = MAX_BUFFER_BYTES / PAGE_SIZE as usize;
 
+/// How long to wait for a missing piece before giving up.
+const PIECE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Default)]
-pub struct InMemoryStorageFactory;
+/// Factory that creates `InMemoryStorage` instances and keeps a handle to each
+/// storage's `wait_for_pieces` flag so it can be flipped on from the outside
+/// when streaming begins.
+#[derive(Clone)]
+pub struct InMemoryStorageFactory {
+    /// Shared list of wait-flags, one per torrent storage created.
+    /// Indexed in creation order (matches librqbit torrent idx).
+    wait_flags: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
+}
+
+impl Default for InMemoryStorageFactory {
+    fn default() -> Self {
+        Self {
+            wait_flags: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
 
 impl InMemoryStorageFactory {
     #[allow(dead_code)]
     pub fn boxed_factory() -> BoxStorageFactory {
-        Self.boxed()
+        Self::default().boxed()
+    }
+
+    /// Enable wait-for-pieces mode on the storage at the given index.
+    pub fn enable_wait(&self, index: usize) {
+        if let Ok(flags) = self.wait_flags.lock() {
+            if let Some(flag) = flags.get(index) {
+                flag.store(true, Ordering::Release);
+            }
+        }
     }
 }
 
@@ -43,7 +72,12 @@ impl StorageFactory for InMemoryStorageFactory {
         _shared: &ManagedTorrentShared,
         _metadata: &TorrentMetadata,
     ) -> anyhow::Result<Self::Storage> {
-        Ok(InMemoryStorage::new())
+        let storage = InMemoryStorage::new();
+        // Keep a handle to this storage's wait flag.
+        if let Ok(mut flags) = self.wait_flags.lock() {
+            flags.push(storage.wait_for_pieces.clone());
+        }
+        Ok(storage)
     }
 
     fn clone_box(&self) -> BoxStorageFactory {
@@ -132,14 +166,26 @@ impl LruCache {
 pub struct InMemoryStorage {
     /// LRU page cache with automatic eviction.
     cache: Arc<Mutex<LruCache>>,
+    /// Signalled every time a new page is written, so readers blocked on a
+    /// missing piece can retry.
+    page_written: Arc<Condvar>,
+    /// When `false` (default), pread_exact fails immediately on missing pages.
+    /// librqbit's initial checksum validation reads every piece — it must fail
+    /// fast so the torrent can finish initializing.
+    /// Set to `true` once streaming starts, so the HTTP stream handler waits
+    /// for pieces that haven't been downloaded yet.
+    wait_for_pieces: Arc<AtomicBool>,
 }
 
 impl InMemoryStorage {
     fn new() -> Self {
         Self {
             cache: Arc::new(Mutex::new(LruCache::new(MAX_PAGES))),
+            page_written: Arc::new(Condvar::new()),
+            wait_for_pieces: Arc::new(AtomicBool::new(false)),
         }
     }
+
 }
 
 impl TorrentStorage for InMemoryStorage {
@@ -152,7 +198,7 @@ impl TorrentStorage for InMemoryStorage {
     }
 
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
-        let mut cache = self.cache.lock().map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+        let should_wait = self.wait_for_pieces.load(Ordering::Acquire);
         let mut remaining = buf.len();
         let mut buf_pos = 0usize;
         let mut cur = offset;
@@ -161,13 +207,51 @@ impl TorrentStorage for InMemoryStorage {
             let page_idx = cur / PAGE_SIZE;
             let page_off = (cur % PAGE_SIZE) as usize;
             let chunk = (PAGE_SIZE as usize - page_off).min(remaining);
-
             let key = (file_id, page_idx);
-            let page = cache
-                .get(&key)
-                .ok_or_else(|| anyhow::anyhow!("piece not downloaded yet (file={file_id}, page={page_idx})"))?;
 
-            buf[buf_pos..buf_pos + chunk].copy_from_slice(&page[page_off..page_off + chunk]);
+            let mut cache = self.cache.lock().map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+
+            if should_wait {
+                // Streaming mode: wait for the page to be downloaded.
+                let deadline = Instant::now() + PIECE_WAIT_TIMEOUT;
+                loop {
+                    if let Some(page) = cache.get(&key) {
+                        buf[buf_pos..buf_pos + chunk]
+                            .copy_from_slice(&page[page_off..page_off + chunk]);
+                        break;
+                    }
+
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(anyhow::anyhow!(
+                            "Timed out waiting for piece (file={file_id}, page={page_idx}). \
+                             The torrent may have stalled or has no peers."
+                        ));
+                    }
+
+                    let (guard, wait_result) = self
+                        .page_written
+                        .wait_timeout(cache, deadline - now)
+                        .map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+                    cache = guard;
+
+                    if wait_result.timed_out() && !cache.contains(&key) {
+                        return Err(anyhow::anyhow!(
+                            "Timed out waiting for piece (file={file_id}, page={page_idx}). \
+                             The torrent may have stalled or has no peers."
+                        ));
+                    }
+                }
+            } else {
+                // Fast-fail mode: used during librqbit's initial checksum
+                // validation — must not block or init will never complete.
+                let page = cache.get(&key).ok_or_else(|| {
+                    anyhow::anyhow!("piece not downloaded yet (file={file_id}, page={page_idx})")
+                })?;
+                buf[buf_pos..buf_pos + chunk]
+                    .copy_from_slice(&page[page_off..page_off + chunk]);
+            }
+
             buf_pos += chunk;
             cur += chunk as u64;
             remaining -= chunk;
@@ -176,34 +260,39 @@ impl TorrentStorage for InMemoryStorage {
     }
 
     fn pwrite_all(&self, file_id: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
-        let mut cache = self.cache.lock().map_err(|_| anyhow::anyhow!("lock poisoned"))?;
-        let mut remaining = buf.len();
-        let mut buf_pos = 0usize;
-        let mut cur = offset;
+        {
+            let mut cache = self.cache.lock().map_err(|_| anyhow::anyhow!("lock poisoned"))?;
+            let mut remaining = buf.len();
+            let mut buf_pos = 0usize;
+            let mut cur = offset;
 
-        while remaining > 0 {
-            let page_idx = cur / PAGE_SIZE;
-            let page_off = (cur % PAGE_SIZE) as usize;
-            let chunk = (PAGE_SIZE as usize - page_off).min(remaining);
+            while remaining > 0 {
+                let page_idx = cur / PAGE_SIZE;
+                let page_off = (cur % PAGE_SIZE) as usize;
+                let chunk = (PAGE_SIZE as usize - page_off).min(remaining);
 
-            let key = (file_id, page_idx);
+                let key = (file_id, page_idx);
 
-            // Get existing page or create a new zeroed one.
-            let mut raw = if cache.contains(&key) {
-                cache.get(&key).unwrap().clone()
-            } else {
-                vec![0u8; PAGE_SIZE as usize]
-            };
+                // Get existing page or create a new zeroed one.
+                let mut raw = if cache.contains(&key) {
+                    cache.get(&key).unwrap().clone()
+                } else {
+                    vec![0u8; PAGE_SIZE as usize]
+                };
 
-            raw[page_off..page_off + chunk].copy_from_slice(&buf[buf_pos..buf_pos + chunk]);
+                raw[page_off..page_off + chunk].copy_from_slice(&buf[buf_pos..buf_pos + chunk]);
 
-            // Store page (old pages auto-evicted if at capacity).
-            cache.insert(key, raw);
+                // Store page (old pages auto-evicted if at capacity).
+                cache.insert(key, raw);
 
-            buf_pos += chunk;
-            cur += chunk as u64;
-            remaining -= chunk;
-        }
+                buf_pos += chunk;
+                cur += chunk as u64;
+                remaining -= chunk;
+            }
+        } // drop lock before notify
+
+        // Wake up any readers waiting for pieces.
+        self.page_written.notify_all();
         Ok(())
     }
 
@@ -229,6 +318,10 @@ impl TorrentStorage for InMemoryStorage {
         };
         Ok(Box::new(InMemoryStorage {
             cache: Arc::new(Mutex::new(cache)),
+            page_written: Arc::new(Condvar::new()),
+            wait_for_pieces: Arc::new(AtomicBool::new(
+                self.wait_for_pieces.load(Ordering::Relaxed),
+            )),
         }))
     }
 }

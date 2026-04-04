@@ -97,9 +97,35 @@ pub struct TorrentEngine {
     config: EngineConfig,
     /// Maps internal torrent indices to their handles
     torrents: RwLock<Vec<StoredTorrent>>,
+    /// Handle to the HTTP API server task — monitored so we can restart on crash.
+    http_server_handle: RwLock<tokio::task::JoinHandle<()>>,
+    /// Shared storage factory — lets us flip per-torrent wait flags.
+    storage_factory: InMemoryStorageFactory,
 }
 
 impl TorrentEngine {
+    /// Spawn (or re-spawn) the HTTP API server, returning its task handle.
+    async fn spawn_http_server(
+        session: Arc<Session>,
+        port: u16,
+    ) -> Result<tokio::task::JoinHandle<()>> {
+        let api = Api::new(session, None, None);
+        let http_api = HttpApi::new(api, Some(HttpApiOptions::default()));
+
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+        let listener = TcpListener::bind(addr)
+            .await
+            .context("Failed to bind HTTP API server")?;
+
+        info!("Starting HTTP API server on http://127.0.0.1:{}", port);
+
+        Ok(tokio::spawn(async move {
+            if let Err(e) = http_api.make_http_api_and_run(listener, None).await {
+                tracing::error!("HTTP API server error: {}", e);
+            }
+        }))
+    }
+
     /// Create a new torrent engine with the given configuration
     pub async fn new(config: EngineConfig) -> Result<Self> {
         // Ensure download directory exists
@@ -108,6 +134,7 @@ impl TorrentEngine {
             .context("Failed to create download directory")?;
 
         // Configure session with security-minded defaults
+        let storage_factory = InMemoryStorageFactory::default();
         let session_opts = SessionOptions {
             disable_dht: !config.dht_enabled,
             // No session persistence — pieces live only in RAM.
@@ -116,7 +143,7 @@ impl TorrentEngine {
             listen_port_range: Some(6881..6889),
             // Route all piece storage to RAM instead of disk.
             // Works cross-platform: Linux, macOS, Windows.
-            default_storage_factory: Some(InMemoryStorageFactory.boxed()),
+            default_storage_factory: Some(storage_factory.clone().boxed()),
             ..Default::default()
         };
 
@@ -127,25 +154,8 @@ impl TorrentEngine {
         .await
         .context("Failed to create torrent session")?;
 
-        // Start HTTP API server for streaming
-        let http_port = config.http_api_port;
-        let api = Api::new(session.clone(), None, None);
-        let http_api = HttpApi::new(api, Some(HttpApiOptions::default()));
-        
-        // Bind to localhost only for security
-        let addr: SocketAddr = ([127, 0, 0, 1], http_port).into();
-        let listener = TcpListener::bind(addr)
-            .await
-            .context("Failed to bind HTTP API server")?;
-        
-        info!("Starting HTTP API server on http://127.0.0.1:{}", http_port);
-        
-        // Spawn HTTP server in background
-        tokio::spawn(async move {
-            if let Err(e) = http_api.make_http_api_and_run(listener, None).await {
-                tracing::error!("HTTP API server error: {}", e);
-            }
-        });
+        // Start HTTP API server for streaming (handle stored for monitoring)
+        let handle = Self::spawn_http_server(session.clone(), config.http_api_port).await?;
 
         info!("Torrent engine initialized, download dir: {:?}", config.download_dir);
 
@@ -153,7 +163,25 @@ impl TorrentEngine {
             session,
             config,
             torrents: RwLock::new(Vec::new()),
+            http_server_handle: RwLock::new(handle),
+            storage_factory,
         })
+    }
+
+    /// Check if the HTTP API server is still running and restart it if it
+    /// has crashed.  Called periodically by the watchdog and before streaming.
+    pub async fn ensure_http_server_alive(&self) -> Result<()> {
+        let mut handle = self.http_server_handle.write().await;
+        if handle.is_finished() {
+            tracing::warn!("HTTP API server has stopped — restarting…");
+            *handle = Self::spawn_http_server(
+                self.session.clone(),
+                self.config.http_api_port,
+            )
+            .await?;
+            info!("HTTP API server restarted successfully");
+        }
+        Ok(())
     }
 
     /// Add a magnet link and return torrent info
@@ -281,6 +309,8 @@ impl TorrentEngine {
             anyhow::bail!("Torrent file too large (max 10 MB)");
         }
 
+        info!("Adding .torrent file ({} bytes)", bytes.len());
+
         let add_opts = AddTorrentOptions {
             paused: false,
             only_files: Some(vec![]),
@@ -294,21 +324,47 @@ impl TorrentEngine {
                 Some(add_opts),
             )
             .await
-            .context("Failed to add torrent file")?;
+            .context("Failed to parse/add torrent file to session")?;
 
         let (torrent_idx, handle) = match response {
-            AddTorrentResponse::Added(idx, handle) => (idx, handle),
-            AddTorrentResponse::AlreadyManaged(idx, handle) => (idx, handle),
+            AddTorrentResponse::Added(idx, handle) => {
+                info!("Torrent file added to session (idx={}), waiting for init…", idx);
+                (idx, handle)
+            }
+            AddTorrentResponse::AlreadyManaged(idx, handle) => {
+                info!("Torrent file already managed (idx={})", idx);
+                (idx, handle)
+            }
             AddTorrentResponse::ListOnly(_) => {
                 anyhow::bail!("Torrent was only listed, not added");
             }
         };
 
-        // .torrent files already contain metadata — no need to wait for peers
-        let timeout_duration = tokio::time::Duration::from_secs(30);
-        match tokio::time::timeout(timeout_duration, handle.wait_until_initialized()).await {
-            Ok(result) => result.context("Failed to initialize torrent from file")?,
-            Err(_) => anyhow::bail!("Timed out initializing torrent from file"),
+        // .torrent files already contain metadata, but librqbit still runs an
+        // initial checksum validation + acquires its init semaphore.  Give it a
+        // generous 60 s.
+        let timeout_duration = tokio::time::Duration::from_secs(60);
+        let init_result =
+            tokio::time::timeout(timeout_duration, handle.wait_until_initialized()).await;
+
+        match init_result {
+            Ok(Ok(())) => {
+                info!("Torrent file initialized successfully (idx={})", torrent_idx);
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Torrent init error (idx={}): {:#}", torrent_idx, e);
+                let _ = self.session.delete(TorrentIdOrHash::Id(torrent_idx), false).await;
+                return Err(e).context("Failed to initialize torrent from file");
+            }
+            Err(_timeout) => {
+                tracing::error!("Torrent init timed out after {}s (idx={})", timeout_duration.as_secs(), torrent_idx);
+                let _ = self.session.delete(TorrentIdOrHash::Id(torrent_idx), false).await;
+                anyhow::bail!(
+                    "Timed out initializing torrent from file after {}s. \
+                     The torrent was removed — please try adding it again.",
+                    timeout_duration.as_secs()
+                );
+            }
         };
 
         let (name, files, total_size) = handle.with_metadata(|metadata| {
@@ -352,6 +408,9 @@ impl TorrentEngine {
 
     /// This enables only that file for download and returns the stream URL
     pub async fn start_stream(&self, torrent_id: usize, file_index: usize) -> Result<String> {
+        // Make sure the HTTP server is alive before handing out a URL.
+        self.ensure_http_server_alive().await?;
+
         let torrents = self.torrents.read().await;
         let stored = torrents.get(torrent_id)
             .ok_or_else(|| anyhow::anyhow!("Torrent not found"))?;
@@ -366,22 +425,42 @@ impl TorrentEngine {
         // Update which files to download
         self.session.update_only_files(&stored.handle, &only_files).await?;
         
-        // Try to unpause - ignore error if already running
-        if let Err(e) = self.session.unpause(&stored.handle).await {
-            let err_msg = e.to_string();
-            // "already live" is not a real error, torrent is already downloading
-            if !err_msg.contains("already live") && !err_msg.contains("already running") {
-                return Err(e.into());
+        // Unpause the torrent so it starts downloading.
+        match self.session.unpause(&stored.handle).await {
+            Ok(()) => info!("Torrent unpaused for streaming"),
+            Err(e) => {
+                let err_msg = format!("{:#}", e);
+                if err_msg.contains("already live") {
+                    info!("Torrent already live, continuing with stream");
+                } else {
+                    tracing::warn!("Unpause error: {}", err_msg);
+                }
             }
-            info!("Torrent already running, continuing with stream");
         }
-        
-        info!("Started streaming file {} of torrent {}", file_index, torrent_id);
-        
+
+        // Enable wait-for-pieces mode so the HTTP stream handler blocks on
+        // missing pages instead of returning 500 errors.
+        self.storage_factory.enable_wait(stored.torrent_idx);
+
+        // Log the torrent state so we can diagnose issues.
+        let state = format!("{:?}", stored.handle.stats().state);
+        let librqbit_idx = stored.torrent_idx;
+        info!(
+            "Started streaming file {} of torrent {} (state={}, librqbit_idx={})",
+            file_index, torrent_id, state, librqbit_idx
+        );
+
+        // Release the read lock before sleeping.
+        drop(torrents);
+
+        // Give the torrent a moment to transition to Live state and connect
+        // to peers before handing the URL to the player.
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
         // Return the stream URL
         Ok(format!(
             "http://127.0.0.1:{}/torrents/{}/stream/{}",
-            self.config.http_api_port, stored.torrent_idx, file_index
+            self.config.http_api_port, librqbit_idx, file_index
         ))
     }
 
