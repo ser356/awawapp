@@ -34,6 +34,9 @@ const showVideoPlayer = ref(false);
 const playerUrl = ref('');
 const playerTitle = ref('');
 const playerSubtitles = ref<Array<{ path: string; url: string }>>([]);
+const playerTorrentId = ref<number>(0);
+const playerFileIndex = ref<number>(0);
+const playerDuration = ref<number | null>(null);
 
 // Event listener cleanup
 let unlistenStats: UnlistenFn | null = null;
@@ -92,10 +95,13 @@ function onStreamingStarted() {
 }
 
 // Called when user wants to play video in the app
-function onPlayInApp(data: { url: string; title: string; subtitles: Array<{ path: string; url: string }> }) {
+function onPlayInApp(data: { url: string; title: string; subtitles: Array<{ path: string; url: string }>; torrentId: number; fileIndex: number; duration: number | null }) {
   playerUrl.value = data.url;
   playerTitle.value = data.title;
   playerSubtitles.value = data.subtitles;
+  playerTorrentId.value = data.torrentId;
+  playerFileIndex.value = data.fileIndex;
+  playerDuration.value = data.duration;
   showVideoPlayer.value = true;
   showFileSelector.value = false;
 }
@@ -106,6 +112,9 @@ function closeVideoPlayer() {
   playerUrl.value = '';
   playerTitle.value = '';
   playerSubtitles.value = [];
+  playerTorrentId.value = 0;
+  playerFileIndex.value = 0;
+  playerDuration.value = null;
 }
 
 // Handle player error
@@ -372,7 +381,6 @@ onUnmounted(() => {
           <FileSelector
             :torrent="selectedTorrent"
             @streaming-started="onStreamingStarted"
-            @play-in-app="onPlayInApp"
             @cancel="cancelFileSelection"
           />
         </Dialog>
@@ -383,6 +391,9 @@ onUnmounted(() => {
           :src="playerUrl"
           :title="playerTitle"
           :subtitle-files="playerSubtitles"
+          :torrent-id="playerTorrentId"
+          :file-index="playerFileIndex"
+          :initial-duration="playerDuration"
           @close="closeVideoPlayer"
           @error="onPlayerError"
         />

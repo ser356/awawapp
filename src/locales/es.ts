@@ -81,7 +81,10 @@ export default {
     subtitles: 'Subtítulos',
     noSubtitles: 'Sin subtítulos',
     loadSubtitle: 'Cargar archivo de subtítulos',
-    playInApp: 'Reproducir en app',
+    playInVLC: 'Reproducir en VLC',
     playExternal: 'Reproductor externo',
+    seekingTo: 'Saltando a {time}...',
+    seekFailed: 'Error al saltar. Prueba otra posición.',
+    seekFar: 'Clic para saltar aquí (puede tardar)',
   },
 };

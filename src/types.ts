@@ -45,6 +45,11 @@ export interface TorrentHistory {
   status: string;
 }
 
+export interface HlsResult {
+  url: string;
+  duration_secs: number | null;
+}
+
 // Utility functions for formatting
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';

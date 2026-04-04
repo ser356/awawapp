@@ -81,7 +81,10 @@ export default {
     subtitles: 'Subtitles',
     noSubtitles: 'No subtitles',
     loadSubtitle: 'Load subtitle file',
-    playInApp: 'Play in app',
+    playInVLC: 'Play in VLC',
     playExternal: 'External player',
+    seekingTo: 'Seeking to {time}...',
+    seekFailed: 'Seek failed. Try a different position.',
+    seekFar: 'Click to jump here (may take a moment)',
   },
 };

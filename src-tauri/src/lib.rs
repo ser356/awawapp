@@ -46,6 +46,7 @@ pub struct AppState {
     pub engine: RwLock<Option<Arc<TorrentEngine>>>,
     pub database: Arc<Database>,
     pub download_dir: PathBuf,
+    pub transcode: Arc<transcode::TranscodeState>,
 }
 
 /// Response wrapper for consistent error handling
@@ -264,14 +265,17 @@ async fn get_stream_url(
     }
 }
 
-/// Get transcoded streaming URL for browser playback (MKV -> MP4)
+/// Get transcoded streaming URL for browser playback (MKV → HLS).
+///
+/// Starts the torrent stream, launches ffmpeg for HLS transcoding,
+/// waits for the first segment, and returns the playlist URL and duration.
 #[tauri::command]
 async fn get_transcode_url(
     state: State<'_, Arc<AppState>>,
     torrent_id: usize,
     file_index: usize,
-) -> Result<CommandResult<String>, String> {
-    // First, ensure the torrent is streaming (this triggers download)
+) -> Result<CommandResult<transcode::HlsResult>, String> {
+    // Ensure the torrent is streaming (triggers download + wait mode).
     let engine_guard = state.engine.read().await;
     let engine = match engine_guard.as_ref() {
         Some(e) => e.clone(),
@@ -279,25 +283,73 @@ async fn get_transcode_url(
     };
     drop(engine_guard);
 
-    // Start the stream (ensures file is being downloaded and wait mode is enabled)
-    // This returns the librqbit stream URL which contains the correct torrent index
-    match engine.start_stream(torrent_id, file_index).await {
-        Ok(stream_url) => {
-            // Extract the librqbit torrent index from the stream URL
-            // URL format: http://127.0.0.1:3030/torrents/{idx}/stream/{file}
-            // We need to use the same idx for the transcode server
-            let parts: Vec<&str> = stream_url.split('/').collect();
-            // parts = ["http:", "", "127.0.0.1:3030", "torrents", "{idx}", "stream", "{file}"]
-            let librqbit_idx = parts.get(4).unwrap_or(&"0");
-            
-            // Return transcode server URL with correct librqbit index
-            let url = format!(
-                "http://127.0.0.1:3031/transcode/{}/{}",
-                librqbit_idx, file_index
-            );
-            Ok(CommandResult::ok(url))
+    // start_stream sets only_files, unpauses, enables wait-for-pieces,
+    // and waits for pre-buffer data.  Returns the librqbit stream URL.
+    let stream_url = match engine.start_stream(torrent_id, file_index).await {
+        Ok(url) => url,
+        Err(e) => return Ok(CommandResult::err(&format!("Failed to start stream: {}", e))),
+    };
+
+    // Extract the librqbit torrent index from the stream URL.
+    let parts: Vec<&str> = stream_url.split('/').collect();
+    let librqbit_idx: u32 = parts.get(4)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Start HLS transcoding (idempotent — reuses existing if running).
+    match transcode::start_hls_transcode(
+        &state.transcode,
+        librqbit_idx,
+        file_index as u32,
+    ).await {
+        Ok(result) => Ok(CommandResult::ok(result)),
+        Err(e) => {
+            error!("HLS transcode failed: {:#}", e);
+            Ok(CommandResult::err(&format!("Transcode failed: {}", e)))
         }
-        Err(e) => Ok(CommandResult::err(&format!("Failed to start stream: {}", e))),
+    }
+}
+
+/// Seek HLS transcode to a specific time position.
+///
+/// Restarts ffmpeg from the specified time offset.
+#[tauri::command]
+async fn seek_transcode(
+    state: State<'_, Arc<AppState>>,
+    torrent_id: usize,
+    file_index: usize,
+    seek_time_secs: f64,
+) -> Result<CommandResult<transcode::HlsResult>, String> {
+    // Get librqbit torrent index
+    let engine_guard = state.engine.read().await;
+    let engine = match engine_guard.as_ref() {
+        Some(e) => e.clone(),
+        None => return Ok(CommandResult::err("Torrent engine not initialized")),
+    };
+    drop(engine_guard);
+
+    // Get librqbit idx from the stream URL
+    let stream_url = match engine.get_stream_url(torrent_id, file_index).await {
+        Ok(url) => url,
+        Err(e) => return Ok(CommandResult::err(&format!("Failed to get stream URL: {}", e))),
+    };
+
+    let parts: Vec<&str> = stream_url.split('/').collect();
+    let librqbit_idx: u32 = parts.get(4)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    match transcode::seek_hls_transcode(
+        &state.transcode,
+        librqbit_idx,
+        file_index as u32,
+        seek_time_secs,
+    ).await {
+        Ok(result) => Ok(CommandResult::ok(result)),
+        Err(e) => {
+            error!("HLS seek failed: {:#}", e);
+            Ok(CommandResult::err(&format!("Seek failed: {}", e)))
+        }
     }
 }
 
@@ -446,10 +498,23 @@ async fn open_in_player(url: String) -> Result<CommandResult<()>, String> {
             if let Ok(output) = check {
                 if output.status.success() {
                     // App exists, open the URL with it
-                    let result = Command::new("open")
-                        .args(["-a", app])
-                        .arg(&url)
-                        .spawn();
+                    // For VLC: add network-caching for better streaming buffer
+                    let result = if app == "VLC" {
+                        Command::new("open")
+                            .args(["-a", app, "--args", "--network-caching=5000"])
+                            .arg(&url)
+                            .spawn()
+                    } else if app == "mpv" {
+                        Command::new("open")
+                            .args(["-a", app, "--args", "--cache=yes", "--cache-pause-initial=yes"])
+                            .arg(&url)
+                            .spawn()
+                    } else {
+                        Command::new("open")
+                            .args(["-a", app])
+                            .arg(&url)
+                            .spawn()
+                    };
                     
                     if result.is_ok() {
                         info!("Opened stream with: {}", app);
@@ -744,11 +809,18 @@ pub fn run() {
             let database = Database::new(&db_path)
                 .expect("Failed to initialize database");
             
+            // Create shared transcode state (used by both HLS server and Tauri commands).
+            let transcode_state = transcode::TranscodeState::new(
+                3031,
+                "http://127.0.0.1:3030".to_string(),
+            );
+
             // Create shared state - use Arc so we can share with background task
             let state = Arc::new(AppState {
                 engine: RwLock::new(None),
                 database: Arc::new(database),
                 download_dir: download_dir.clone(),
+                transcode: transcode_state.clone(),
             });
             
             // Store state in Tauri (the Arc wrapper is transparent to State<>)
@@ -777,13 +849,11 @@ pub fn run() {
 
                         info!("Torrent engine initialized successfully");
 
-                        // Start transcode server for browser-compatible streaming
-                        tokio::spawn(async {
-                            if let Err(e) = transcode::start_transcode_server(
-                                3031,  // Transcode server port
-                                "http://127.0.0.1:3030".to_string(),  // librqbit HTTP API
-                            ).await {
-                                error!("Transcode server error: {}", e);
+                        // Start HLS file server (serves playlists + segments).
+                        let hls_state = state_clone.transcode.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = transcode::start_hls_server(hls_state).await {
+                                error!("HLS server error: {}", e);
                             }
                         });
 
@@ -813,6 +883,7 @@ pub fn run() {
             get_all_stats,
             get_stream_url,
             get_transcode_url,
+            seek_transcode,
             get_history,
             search_history,
             delete_from_history,

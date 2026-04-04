@@ -533,14 +533,16 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-/// Open a URL in VLC
+/// Open a URL in VLC with network caching for better streaming
 fn open_in_vlc(url: &str) -> Result<()> {
     use std::process::Command;
     
     #[cfg(target_os = "macos")]
     {
+        // --network-caching=5000 gives VLC 5 seconds of buffer
+        // This prevents pauses when pieces are still downloading
         Command::new("open")
-            .args(["-a", "VLC", url])
+            .args(["-a", "VLC", "--args", "--network-caching=5000", url])
             .spawn()
             .context("Failed to open VLC. Is it installed?")?;
     }
@@ -557,7 +559,7 @@ fn open_in_vlc(url: &str) -> Result<()> {
         
         if let Some(path) = vlc_path {
             Command::new(path)
-                .arg(url)
+                .args(["--network-caching=5000", url])
                 .spawn()
                 .context("Failed to open VLC")?;
         } else {
@@ -568,7 +570,7 @@ fn open_in_vlc(url: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         Command::new("vlc")
-            .arg(url)
+            .args(["--network-caching=5000", url])
             .spawn()
             .context("Failed to open VLC. Is it installed?")?;
     }

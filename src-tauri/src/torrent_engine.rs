@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 /// File information for UI display
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +128,10 @@ impl TorrentEngine {
 
     /// Create a new torrent engine with the given configuration
     pub async fn new(config: EngineConfig) -> Result<Self> {
+        // Allow any origin for librqbit's CORS layer so Tauri's webview
+        // (tauri://localhost) and dev server can access the stream API.
+        std::env::set_var("CORS_ALLOW_REGEXP", ".*");
+
         // Ensure download directory exists
         tokio::fs::create_dir_all(&config.download_dir)
             .await
@@ -452,18 +456,100 @@ impl TorrentEngine {
             file_index, torrent_id, state, librqbit_idx
         );
 
-        // Release the read lock before sleeping.
+        // Release the read lock before waiting.
         drop(torrents);
 
-        // Give the torrent a moment to transition to Live state and connect
-        // to peers before handing the URL to the player.
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        // Return the stream URL
-        Ok(format!(
+        // Wait for the torrent to reach Live state and have some initial data
+        // before handing the URL to the player/transcoder.  A 500 ms sleep is
+        // far too short for most torrents — poll until we see actual progress.
+        let url = format!(
             "http://127.0.0.1:{}/torrents/{}/stream/{}",
             self.config.http_api_port, librqbit_idx, file_index
-        ))
+        );
+
+        // Increased timeout for slow torrents and minimum buffer for smooth playback
+        // BD Remux can be 30-50 Mbps, so we need ~20MB for 3-5 seconds of buffer
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(120);
+        // 20 MB minimum buffer for ~3-5 seconds of BD Remux content
+        let min_buffer_bytes: u64 = 20 * 1024 * 1024;
+        let mut last_log = tokio::time::Instant::now();
+        let start_time = tokio::time::Instant::now();
+        
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            // Check if we've downloaded any bytes for this torrent
+            match self.get_stats(torrent_id).await {
+                Ok(stats) => {
+                    let state_str = &stats.state;
+                    
+                    // Log every 5 seconds
+                    if last_log.elapsed() >= std::time::Duration::from_secs(5) {
+                        let elapsed = start_time.elapsed().as_secs();
+                        let speed_mbps = if elapsed > 0 {
+                            (stats.download_speed as f64 * 8.0) / 1_000_000.0
+                        } else { 0.0 };
+                        info!(
+                            "Buffering: {:.1}MB / {:.1}MB ({:.1} Mbps, {} peers, {}s elapsed)",
+                            stats.downloaded_bytes as f64 / 1_048_576.0,
+                            min_buffer_bytes as f64 / 1_048_576.0,
+                            speed_mbps,
+                            stats.peers_connected,
+                            elapsed
+                        );
+                        last_log = tokio::time::Instant::now();
+                    }
+                    
+                    // Wait for minimum buffer to ensure smooth playback start
+                    if stats.downloaded_bytes >= min_buffer_bytes {
+                        info!("Pre-buffer OK: {:.1} MB downloaded", stats.downloaded_bytes as f64 / 1_048_576.0);
+                        break;
+                    }
+                    // Also accept if state is Live with peers and at least 10MB downloaded
+                    // This allows starting earlier for fast torrents
+                    if state_str.contains("Live") && stats.peers_connected >= 1
+                        && stats.downloaded_bytes >= 10 * 1024 * 1024
+                    {
+                        info!("Torrent is live with {} peers and {:.1} MB downloaded, starting stream",
+                              stats.peers_connected, stats.downloaded_bytes as f64 / 1_048_576.0);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    info!("Could not get stats while waiting: {}", e);
+                }
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                // Check final stats before giving up
+                if let Ok(stats) = self.get_stats(torrent_id).await {
+                    if stats.downloaded_bytes == 0 {
+                        if stats.peers_connected == 0 {
+                            anyhow::bail!(
+                                "No peers found after 120 seconds. The torrent may have no active seeders. \
+                                 Try a different source or wait for peers to connect."
+                            );
+                        } else {
+                            anyhow::bail!(
+                                "No data received after 120 seconds despite {} peers. \
+                                 The torrent may be slow or the selected file is not being seeded.",
+                                stats.peers_connected
+                            );
+                        }
+                    }
+                    // Have some data but not enough - proceed anyway with warning
+                    warn!(
+                        "Pre-buffer deadline reached with {} bytes ({} peers), proceeding",
+                        stats.downloaded_bytes, stats.peers_connected
+                    );
+                } else {
+                    info!("Pre-buffer deadline reached, proceeding anyway");
+                }
+                break;
+            }
+        }
+
+        Ok(url)
     }
 
     /// Add a file to the current streaming selection

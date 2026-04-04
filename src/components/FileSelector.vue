@@ -5,7 +5,6 @@ import { invoke } from '@tauri-apps/api/core';
 import type { TorrentInfo, CommandResult } from '../types';
 import { formatBytes } from '../types';
 import Button from 'primevue/button';
-import SplitButton from 'primevue/splitbutton';
 
 const { t } = useI18n();
 
@@ -16,7 +15,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cancel'): void;
   (e: 'streaming-started'): void;
-  (e: 'play-in-app', data: { url: string; title: string; subtitles: Array<{ path: string; url: string }> }): void;
 }>();
 
 const loadingFile = ref<number | null>(null);
@@ -25,13 +23,6 @@ function isStreamableFile(path: string): boolean {
   const streamableExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.webm', '.m4v'];
   const lowerPath = path.toLowerCase();
   return streamableExtensions.some(ext => lowerPath.endsWith(ext));
-}
-
-// Files that need transcoding for browser playback
-function needsTranscoding(path: string): boolean {
-  const needsTranscode = ['.mkv', '.avi', '.wmv', '.mov', '.m4v'];
-  const lowerPath = path.toLowerCase();
-  return needsTranscode.some(ext => lowerPath.endsWith(ext));
 }
 
 function isSubtitleFile(path: string): boolean {
@@ -55,33 +46,6 @@ const streamableFiles = computed(() => {
   return props.torrent.files.filter(f => isStreamableFile(f.path));
 });
 
-const subtitleFiles = computed(() => {
-  if (!props.torrent) return [];
-  return props.torrent.files.filter(f => isSubtitleFile(f.path));
-});
-
-// Get base name without extension for matching subtitles to video
-function getBaseName(path: string): string {
-  const name = path.split('/').pop() || path;
-  return name.replace(/\.[^.]+$/, '').toLowerCase();
-}
-
-// Find subtitles that match a video file (same base name or in same folder)
-function findMatchingSubtitles(videoPath: string): typeof subtitleFiles.value {
-  const videoBase = getBaseName(videoPath);
-  const videoFolder = videoPath.substring(0, videoPath.lastIndexOf('/') + 1);
-  
-  return subtitleFiles.value.filter(sub => {
-    const subBase = getBaseName(sub.path);
-    const subFolder = sub.path.substring(0, sub.path.lastIndexOf('/') + 1);
-    
-    // Match by base name or same folder
-    return subBase.includes(videoBase) || 
-           videoBase.includes(subBase) || 
-           subFolder === videoFolder;
-  });
-}
-
 async function getStreamUrl(fileIndex: number): Promise<string | null> {
   if (!props.torrent) return null;
   
@@ -99,70 +63,7 @@ async function getStreamUrl(fileIndex: number): Promise<string | null> {
   return result.data;
 }
 
-// Get transcoded URL for browser playback (MKV -> MP4)
-async function getTranscodeUrl(fileIndex: number): Promise<string | null> {
-  if (!props.torrent) return null;
-  
-  const result = await invoke<CommandResult<string>>('get_transcode_url', {
-    torrentId: props.torrent.id,
-    fileIndex
-  });
-  
-  if (!result.success || !result.data) {
-    console.error('Failed to get transcode URL:', result.error);
-    alert(t('fileSelector.streamError') + ': ' + (result.error || 'Unknown error'));
-    return null;
-  }
-  
-  return result.data;
-}
-
-async function playInApp(fileIndex: number) {
-  if (!props.torrent) return;
-  loadingFile.value = fileIndex;
-  
-  try {
-    const file = props.torrent.files.find(f => f.index === fileIndex);
-    const filePath = file?.path || '';
-    const title = filePath.split('/').pop() || props.torrent.name;
-    
-    // Use transcoding for MKV and other non-browser-native formats
-    let streamUrl: string | null;
-    if (needsTranscoding(filePath)) {
-      console.log('Using transcode URL for:', filePath);
-      streamUrl = await getTranscodeUrl(fileIndex);
-    } else {
-      streamUrl = await getStreamUrl(fileIndex);
-    }
-    
-    if (!streamUrl) {
-      loadingFile.value = null;
-      return;
-    }
-    
-    // Get matching subtitles and their stream URLs
-    const matchingSubs = findMatchingSubtitles(filePath);
-    const subtitles: Array<{ path: string; url: string }> = [];
-    
-    for (const sub of matchingSubs) {
-      // Start streaming subtitles too
-      const subUrl = await getStreamUrl(sub.index);
-      if (subUrl) {
-        subtitles.push({ path: sub.path, url: subUrl });
-      }
-    }
-    
-    emit('play-in-app', { url: streamUrl, title, subtitles });
-    emit('streaming-started');
-  } catch (err) {
-    console.error('Stream error:', err);
-    alert('Error: ' + String(err));
-  } finally {
-    loadingFile.value = null;
-  }
-}
-
-async function playExternal(fileIndex: number) {
+async function playInVLC(fileIndex: number) {
   if (!props.torrent) return;
   loadingFile.value = fileIndex;
   
@@ -188,16 +89,6 @@ async function playExternal(fileIndex: number) {
   } finally {
     loadingFile.value = null;
   }
-}
-
-function getPlayActions(fileIndex: number) {
-  return [
-    {
-      label: t('player.playExternal'),
-      icon: 'pi pi-external-link',
-      command: () => playExternal(fileIndex)
-    }
-  ];
 }
 </script>
 
@@ -235,11 +126,10 @@ function getPlayActions(fileIndex: number) {
           <span class="file-size">{{ formatBytes(file.size) }}</span>
         </div>
         <div class="file-actions">
-          <SplitButton
-            :label="t('player.playInApp')"
+          <Button
+            :label="t('player.playInVLC')"
             icon="pi pi-play"
-            :model="getPlayActions(file.index)"
-            @click="playInApp(file.index)"
+            @click="playInVLC(file.index)"
             size="small"
             :loading="loadingFile === file.index"
           />

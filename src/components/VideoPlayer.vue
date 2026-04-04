@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { invoke } from '@tauri-apps/api/core';
 import Button from 'primevue/button';
 import Slider from 'primevue/slider';
 import Dropdown from 'primevue/dropdown';
+
+import type { CommandResult, HlsResult } from '../types';
 
 const { t } = useI18n();
 
@@ -38,11 +41,15 @@ const props = defineProps<{
   src: string;
   title: string;
   subtitleFiles?: Array<{ path: string; url: string }>;
+  torrentId: number;
+  fileIndex: number;
+  initialDuration?: number | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'error', message: string): void;
+  (e: 'update:src', newSrc: string): void;
 }>();
 
 // Refs
@@ -55,6 +62,7 @@ const isPlaying = ref(false);
 const isMuted = ref(false);
 const isFullscreen = ref(false);
 const isBuffering = ref(true);
+const isSeeking = ref(false);
 const showControls = ref(true);
 const volume = ref(100);
 const currentTime = ref(0);
@@ -63,6 +71,7 @@ const buffered = ref(0);
 const playbackError = ref<string | null>(null);
 const retryCount = ref(0);
 const maxRetries = 5;
+const currentSrc = ref('');
 
 // Audio tracks
 const audioTracks = ref<AudioTrackInfo[]>([]);
@@ -150,14 +159,55 @@ function setVolume(val: number | number[]) {
   isMuted.value = v === 0;
 }
 
-function seek(percent: number) {
-  if (!videoRef.value || !duration.value) return;
-  videoRef.value.currentTime = (percent / 100) * duration.value;
+async function seek(percent: number) {
+  if (!videoRef.value || !duration.value || isSeeking.value) return;
+  
+  const targetTime = (percent / 100) * duration.value;
+  const bufferEnd = buffered.value;
+  
+  // If seeking within buffered range, just seek normally
+  if (targetTime <= bufferEnd + 10) {
+    videoRef.value.currentTime = targetTime;
+    return;
+  }
+  
+  // Need to seek beyond buffer - restart transcode from that point
+  console.log(`Seek beyond buffer: target=${targetTime}s, buffered=${bufferEnd}s`);
+  isSeeking.value = true;
+  isBuffering.value = true;
+  playbackError.value = t('player.seekingTo', { time: formatTime(targetTime) });
+  
+  try {
+    const result = await invoke<CommandResult<HlsResult>>('seek_transcode', {
+      torrentId: props.torrentId,
+      fileIndex: props.fileIndex,
+      seekTimeSecs: targetTime,
+    });
+    
+    if (result.success && result.data) {
+      // Update the video source to the new URL
+      currentSrc.value = result.data.url;
+      videoRef.value.src = result.data.url;
+      videoRef.value.load();
+      videoRef.value.play().catch(() => {});
+      playbackError.value = null;
+    } else {
+      playbackError.value = result.error || t('player.seekFailed');
+      emit('error', result.error || 'Seek failed');
+    }
+  } catch (err) {
+    console.error('Seek error:', err);
+    playbackError.value = t('player.seekFailed');
+  } finally {
+    isSeeking.value = false;
+  }
 }
 
-function seekRelative(seconds: number) {
+async function seekRelative(seconds: number) {
   if (!videoRef.value) return;
-  videoRef.value.currentTime = Math.max(0, Math.min(duration.value, videoRef.value.currentTime + seconds));
+  const targetTime = Math.max(0, Math.min(duration.value, videoRef.value.currentTime + seconds));
+  const targetPercent = duration.value ? (targetTime / duration.value) * 100 : 0;
+  await seek(targetPercent);
 }
 
 async function toggleFullscreen() {
@@ -457,6 +507,15 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeydown);
   document.addEventListener('fullscreenchange', onFullscreenChange);
   
+  // Initialize current source
+  currentSrc.value = props.src;
+  
+  // Use initial duration from backend (ffprobe) if available
+  if (props.initialDuration && props.initialDuration > 0) {
+    duration.value = props.initialDuration;
+    console.log('Using initial duration from backend:', props.initialDuration);
+  }
+  
   // Auto-play when mounted
   if (videoRef.value) {
     videoRef.value.play().catch(() => {
@@ -491,7 +550,7 @@ onUnmounted(() => {
     <!-- Video Element -->
     <video
       ref="videoRef"
-      :src="src"
+      :src="currentSrc || src"
       class="video-element"
       @timeupdate="onTimeUpdate"
       @loadedmetadata="onLoadedMetadata"
@@ -503,13 +562,13 @@ onUnmounted(() => {
       @click="togglePlay"
       @dblclick="toggleFullscreen"
       preload="auto"
-      crossorigin="anonymous"
     />
     
-    <!-- Buffering Indicator -->
-    <div v-if="isBuffering" class="buffering-overlay">
+    <!-- Buffering/Seeking Indicator -->
+    <div v-if="isBuffering || isSeeking" class="buffering-overlay">
       <div class="spinner"></div>
       <span v-if="playbackError">{{ playbackError }}</span>
+      <span v-else-if="isSeeking">{{ t('player.seekingTo', { time: '' }) }}</span>
       <span v-else>{{ t('player.buffering') }}</span>
     </div>
     
@@ -545,10 +604,17 @@ onUnmounted(() => {
       <!-- Bottom Controls -->
       <div class="bottom-controls">
         <!-- Progress Bar -->
-        <div class="progress-container" @click="(e) => seek((e.offsetX / (e.target as HTMLElement).clientWidth) * 100)">
+        <div 
+          class="progress-container" 
+          @click="(e) => seek((e.offsetX / (e.target as HTMLElement).clientWidth) * 100)"
+        >
           <div class="progress-buffered" :style="{ width: bufferedPercent + '%' }"></div>
           <div class="progress-played" :style="{ width: progressPercent + '%' }"></div>
           <div class="progress-handle" :style="{ left: progressPercent + '%' }"></div>
+          <!-- Seek zone indicator -->
+          <div v-if="bufferedPercent < 100" class="progress-seek-zone" :style="{ left: bufferedPercent + '%' }">
+            <span class="seek-zone-label">{{ t('player.seekFar') }}</span>
+          </div>
         </div>
         
         <!-- Control Buttons -->
@@ -607,7 +673,7 @@ onUnmounted(() => {
               :options="audioTracks"
               optionLabel="label"
               optionValue="index"
-              @change="(e) => setAudioTrack(e.value)"
+              @change="(e: { value: number }) => setAudioTrack(e.value)"
               class="track-dropdown"
               :placeholder="t('player.audioTrack')"
             >
@@ -826,6 +892,33 @@ onUnmounted(() => {
 
 .progress-container:hover .progress-handle {
   opacity: 1;
+}
+
+.progress-seek-zone {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  right: 0;
+  height: 100%;
+  pointer-events: none;
+}
+
+.seek-zone-label {
+  display: none;
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.progress-container:hover .seek-zone-label {
+  display: block;
 }
 
 .controls-row {
