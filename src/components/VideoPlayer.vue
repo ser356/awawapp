@@ -673,7 +673,7 @@ onUnmounted(() => {
               :options="audioTracks"
               optionLabel="label"
               optionValue="index"
-              @change="(e: { value: number }) => setAudioTrack(e.value)"
+              @change="(e) => setAudioTrack(e.value)"
               class="track-dropdown"
               :placeholder="t('player.audioTrack')"
             >
