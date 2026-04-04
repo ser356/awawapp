@@ -54,10 +54,13 @@ clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 console = "0.15"
 
-# HTTP server for streaming
+# HTTP server for streaming (kept for librqbit compatibility)
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
 reqwest = { version = "0.11", features = ["json"] }
+
+# mpv player via JSON IPC
+tauri-plugin-mpv = "0.5"
 
 # Window effects
 window-vibrancy = "0.5"

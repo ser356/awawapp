@@ -8,6 +8,7 @@ import MagnetInput from './components/MagnetInput.vue';
 import FileSelector from './components/FileSelector.vue';
 import TorrentCard from './components/TorrentCard.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
+import MpvPlayer from './components/MpvPlayer.vue';
 
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
@@ -27,6 +28,9 @@ const showFileSelector = ref(false);
 const errorMessage = ref('');
 const deleteConfirmId = ref<number | null>(null);
 const showDeleteDialog = ref(false);
+
+// mpv player state
+const mpvPlayback = ref<{ url: string; title: string } | null>(null);
 
 // Event listener cleanup
 let unlistenStats: UnlistenFn | null = null;
@@ -79,9 +83,27 @@ function onTorrentAdded(info: TorrentInfo) {
 // Called when user starts streaming from FileSelector
 function onStreamingStarted() {
   // Keep the modal open so user can stream more files
-  // Or close it:
-  // showFileSelector.value = false;
-  // selectedTorrent.value = null;
+}
+
+// Called when user clicks play — launch mpv
+function onPlay(data: { url: string; title: string; torrentId: number; fileIndex: number }) {
+  mpvPlayback.value = { url: data.url, title: data.title };
+  showFileSelector.value = false;
+}
+
+// Called when mpv player is closed
+function onMpvClose() {
+  mpvPlayback.value = null;
+}
+
+// Handle mpv player error
+function onMpvError(msg: string) {
+  toast.add({
+    severity: 'error',
+    summary: 'Player Error',
+    detail: msg,
+    life: 5000,
+  });
 }
 
 // Cancel file selection
@@ -343,9 +365,19 @@ onUnmounted(() => {
           <FileSelector
             :torrent="selectedTorrent"
             @streaming-started="onStreamingStarted"
+            @play="onPlay"
             @cancel="cancelFileSelection"
           />
         </Dialog>
+        
+        <!-- mpv Player Controller -->
+        <MpvPlayer
+          v-if="mpvPlayback"
+          :src="mpvPlayback.url"
+          :title="mpvPlayback.title"
+          @close="onMpvClose"
+          @error="onMpvError"
+        />
         
         <!-- Delete Confirmation Dialog -->
         <Dialog

@@ -15,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cancel'): void;
   (e: 'streaming-started'): void;
+  (e: 'play', data: { url: string; title: string; torrentId: number; fileIndex: number }): void;
 }>();
 
 const loadingFile = ref<number | null>(null);
@@ -63,7 +64,7 @@ async function getStreamUrl(fileIndex: number): Promise<string | null> {
   return result.data;
 }
 
-async function playInVLC(fileIndex: number) {
+async function playFile(fileIndex: number) {
   if (!props.torrent) return;
   loadingFile.value = fileIndex;
   
@@ -74,13 +75,16 @@ async function playInVLC(fileIndex: number) {
       return;
     }
     
-    // Open in best available player (VLC → mpv → system default)
-    const playerResult = await invoke<CommandResult<void>>('open_in_player', { url: streamUrl });
-
-    if (!playerResult.success) {
-      console.error('Player open failed:', playerResult.error);
-      alert(t('fileSelector.noPlayerFound', { url: streamUrl }));
-    }
+    const file = props.torrent.files.find(f => f.index === fileIndex);
+    const title = file?.path.split('/').pop() || props.torrent.name;
+    
+    // Emit play event — MpvPlayer will handle playback
+    emit('play', {
+      url: streamUrl,
+      title,
+      torrentId: props.torrent.id,
+      fileIndex,
+    });
     
     emit('streaming-started');
   } catch (err) {
@@ -127,9 +131,9 @@ async function playInVLC(fileIndex: number) {
         </div>
         <div class="file-actions">
           <Button
-            :label="t('player.playInVLC')"
+            :label="'▶ ' + (t('player.play') || 'Reproducir')"
             icon="pi pi-play"
-            @click="playInVLC(file.index)"
+            @click="playFile(file.index)"
             size="small"
             :loading="loadingFile === file.index"
           />

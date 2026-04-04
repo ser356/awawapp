@@ -638,6 +638,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_mpv::init())
         .setup(|app| {
             // Create native menu with Check for Updates in app menu
             #[cfg(target_os = "macos")]
