@@ -12,6 +12,7 @@ pub mod cli;
 pub mod database;
 mod memory_storage;
 pub mod torrent_engine;
+pub mod transcode;
 
 use crate::database::{Database, TorrentHistory};
 use crate::torrent_engine::{EngineConfig, TorrentEngine, TorrentInfo, TorrentStats};
@@ -260,6 +261,43 @@ async fn get_stream_url(
     match engine.get_stream_url(torrent_id, file_index).await {
         Ok(url) => Ok(CommandResult::ok(url)),
         Err(e) => Ok(CommandResult::err(&format!("Failed to get stream URL: {}", e))),
+    }
+}
+
+/// Get transcoded streaming URL for browser playback (MKV -> MP4)
+#[tauri::command]
+async fn get_transcode_url(
+    state: State<'_, Arc<AppState>>,
+    torrent_id: usize,
+    file_index: usize,
+) -> Result<CommandResult<String>, String> {
+    // First, ensure the torrent is streaming (this triggers download)
+    let engine_guard = state.engine.read().await;
+    let engine = match engine_guard.as_ref() {
+        Some(e) => e.clone(),
+        None => return Ok(CommandResult::err("Torrent engine not initialized")),
+    };
+    drop(engine_guard);
+
+    // Start the stream (ensures file is being downloaded and wait mode is enabled)
+    // This returns the librqbit stream URL which contains the correct torrent index
+    match engine.start_stream(torrent_id, file_index).await {
+        Ok(stream_url) => {
+            // Extract the librqbit torrent index from the stream URL
+            // URL format: http://127.0.0.1:3030/torrents/{idx}/stream/{file}
+            // We need to use the same idx for the transcode server
+            let parts: Vec<&str> = stream_url.split('/').collect();
+            // parts = ["http:", "", "127.0.0.1:3030", "torrents", "{idx}", "stream", "{file}"]
+            let librqbit_idx = parts.get(4).unwrap_or(&"0");
+            
+            // Return transcode server URL with correct librqbit index
+            let url = format!(
+                "http://127.0.0.1:3031/transcode/{}/{}",
+                librqbit_idx, file_index
+            );
+            Ok(CommandResult::ok(url))
+        }
+        Err(e) => Ok(CommandResult::err(&format!("Failed to start stream: {}", e))),
     }
 }
 
@@ -521,8 +559,16 @@ async fn start_http_watchdog(state: Arc<AppState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize tracing for logging
-    tracing_subscriber::fmt::init();
+    // Initialize tracing for logging with RUST_LOG env support
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("awawapp=info".parse().unwrap())
+                .add_directive("librqbit=info".parse().unwrap())
+        )
+        .init();
+
+    info!("=== AWAWAPP STARTING ===");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -731,6 +777,16 @@ pub fn run() {
 
                         info!("Torrent engine initialized successfully");
 
+                        // Start transcode server for browser-compatible streaming
+                        tokio::spawn(async {
+                            if let Err(e) = transcode::start_transcode_server(
+                                3031,  // Transcode server port
+                                "http://127.0.0.1:3030".to_string(),  // librqbit HTTP API
+                            ).await {
+                                error!("Transcode server error: {}", e);
+                            }
+                        });
+
                         // Launch watchdog for the HTTP API server
                         let watchdog_state = state_clone.clone();
                         tokio::spawn(async move {
@@ -756,6 +812,7 @@ pub fn run() {
             get_torrent_stats,
             get_all_stats,
             get_stream_url,
+            get_transcode_url,
             get_history,
             search_history,
             delete_from_history,

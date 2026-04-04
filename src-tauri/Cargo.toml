@@ -35,6 +35,7 @@ librqbit = { version = "8", features = ["http-api", "tracing-subscriber-utils"] 
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -42,10 +43,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Error handling & utilities
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"
 hex = "0.4"
 urlencoding = "2"
+linked-hash-map = "0.5"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -55,6 +57,7 @@ console = "0.15"
 # HTTP server for streaming
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
+reqwest = { version = "0.11", features = ["json"] }
 
 # Window effects
 window-vibrancy = "0.5"

@@ -8,6 +8,7 @@ import MagnetInput from './components/MagnetInput.vue';
 import FileSelector from './components/FileSelector.vue';
 import TorrentCard from './components/TorrentCard.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
+import VideoPlayer from './components/VideoPlayer.vue';
 
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
@@ -27,6 +28,12 @@ const showFileSelector = ref(false);
 const errorMessage = ref('');
 const deleteConfirmId = ref<number | null>(null);
 const showDeleteDialog = ref(false);
+
+// Video Player State
+const showVideoPlayer = ref(false);
+const playerUrl = ref('');
+const playerTitle = ref('');
+const playerSubtitles = ref<Array<{ path: string; url: string }>>([]);
 
 // Event listener cleanup
 let unlistenStats: UnlistenFn | null = null;
@@ -82,6 +89,28 @@ function onStreamingStarted() {
   // Or close it:
   // showFileSelector.value = false;
   // selectedTorrent.value = null;
+}
+
+// Called when user wants to play video in the app
+function onPlayInApp(data: { url: string; title: string; subtitles: Array<{ path: string; url: string }> }) {
+  playerUrl.value = data.url;
+  playerTitle.value = data.title;
+  playerSubtitles.value = data.subtitles;
+  showVideoPlayer.value = true;
+  showFileSelector.value = false;
+}
+
+// Close video player
+function closeVideoPlayer() {
+  showVideoPlayer.value = false;
+  playerUrl.value = '';
+  playerTitle.value = '';
+  playerSubtitles.value = [];
+}
+
+// Handle player error
+function onPlayerError(message: string) {
+  toast.add({ severity: 'error', summary: t('notifications.error'), detail: message, life: 5000 });
 }
 
 // Cancel file selection
@@ -343,9 +372,20 @@ onUnmounted(() => {
           <FileSelector
             :torrent="selectedTorrent"
             @streaming-started="onStreamingStarted"
+            @play-in-app="onPlayInApp"
             @cancel="cancelFileSelection"
           />
         </Dialog>
+        
+        <!-- Video Player -->
+        <VideoPlayer
+          v-if="showVideoPlayer"
+          :src="playerUrl"
+          :title="playerTitle"
+          :subtitle-files="playerSubtitles"
+          @close="closeVideoPlayer"
+          @error="onPlayerError"
+        />
         
         <!-- Delete Confirmation Dialog -->
         <Dialog

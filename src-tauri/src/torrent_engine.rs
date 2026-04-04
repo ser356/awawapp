@@ -440,7 +440,9 @@ impl TorrentEngine {
 
         // Enable wait-for-pieces mode so the HTTP stream handler blocks on
         // missing pages instead of returning 500 errors.
-        self.storage_factory.enable_wait(stored.torrent_idx);
+        // Use info_hash to correctly identify the storage.
+        let info_hash = stored.handle.shared().info_hash.0;
+        self.storage_factory.enable_wait(&info_hash);
 
         // Log the torrent state so we can diagnose issues.
         let state = format!("{:?}", stored.handle.stats().state);

@@ -72,4 +72,16 @@ export default {
     english: 'English',
     spanish: 'Spanish',
   },
+  player: {
+    buffering: 'Buffering...',
+    playbackError: 'Playback error. Try again.',
+    connectionLost: 'Connection lost. The stream may have ended.',
+    retry: 'Retry',
+    audioTrack: 'Audio',
+    subtitles: 'Subtitles',
+    noSubtitles: 'No subtitles',
+    loadSubtitle: 'Load subtitle file',
+    playInApp: 'Play in app',
+    playExternal: 'External player',
+  },
 };

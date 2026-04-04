@@ -72,4 +72,16 @@ export default {
     english: 'Inglés',
     spanish: 'Español',
   },
+  player: {
+    buffering: 'Cargando...',
+    playbackError: 'Error de reproducción. Inténtalo de nuevo.',
+    connectionLost: 'Conexión perdida. El stream puede haber terminado.',
+    retry: 'Reintentar',
+    audioTrack: 'Audio',
+    subtitles: 'Subtítulos',
+    noSubtitles: 'Sin subtítulos',
+    loadSubtitle: 'Cargar archivo de subtítulos',
+    playInApp: 'Reproducir en app',
+    playExternal: 'Reproductor externo',
+  },
 };
