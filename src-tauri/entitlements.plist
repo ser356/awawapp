@@ -13,5 +13,9 @@
     <!-- Allow unsigned executable memory (required for JIT in some cases) -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+
+    <!-- Allow DYLD_LIBRARY_PATH so bundled libmpv.dylib can be found -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
 </dict>
 </plist>
