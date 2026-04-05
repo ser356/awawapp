@@ -74,9 +74,29 @@ echo ""
 
 echo "── Step 1: mpv binary ──"
 
-MPV_BIN="$(which mpv || true)"
+MPV_BIN="$(which mpv 2>/dev/null || which mpv.exe 2>/dev/null || true)"
+
+# On Windows in CI, auto-download mpv if not found
+if [ -z "$MPV_BIN" ] && [ "$PLATFORM" = "windows" ]; then
+    echo "  mpv not in PATH, downloading latest build..."
+    MPV_URL=$(curl -s https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest \
+        | jq -r '.assets[] | select(.name | test("^mpv-x86_64-[0-9].*\\.7z$")) | .browser_download_url')
+    if [ -n "$MPV_URL" ] && [ "$MPV_URL" != "null" ]; then
+        TMP_MPV="$(mktemp -d)"
+        echo "  Downloading from: $MPV_URL"
+        curl -fsSL "$MPV_URL" -o "$TMP_MPV/mpv.7z"
+        7z x "$TMP_MPV/mpv.7z" -o"$TMP_MPV/extracted" -y > /dev/null
+        MPV_BIN="$(find "$TMP_MPV/extracted" -name 'mpv.exe' -type f | head -1)"
+        if [ -n "$MPV_BIN" ]; then
+            echo "  Downloaded mpv to: $MPV_BIN"
+            # Also note the directory for DLL bundling later
+            MPV_WIN_DIR="$(dirname "$MPV_BIN")"
+        fi
+    fi
+fi
+
 if [ -z "$MPV_BIN" ]; then
-    echo "ERROR: mpv not found in PATH."
+    echo "ERROR: mpv not found."
     case "$PLATFORM" in
         macos)   echo "  Install: brew install mpv" ;;
         linux)   echo "  Install: sudo apt install mpv" ;;
@@ -210,7 +230,7 @@ case "$PLATFORM" in
     windows)
         # Windows: mpv official builds are self-contained zips.
         # Just need to copy DLLs that are next to mpv.exe.
-        MPV_DIR="$(dirname "$MPV_BIN")"
+        MPV_DIR="${MPV_WIN_DIR:-$(dirname "$MPV_BIN")}"
 
         echo "  Copying DLLs from mpv directory: $MPV_DIR"
         DLL_COUNT=0
