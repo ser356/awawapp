@@ -17,8 +17,10 @@ jobs:
         include:
           - platform: ubuntu-22.04
             artifact-name: awawapp-linux
-          - platform: macos-latest
-            artifact-name: awawapp-macos
+          - platform: macos-14
+            artifact-name: awawapp-macos-arm64
+          - platform: macos-13
+            artifact-name: awawapp-macos-x64
           - platform: windows-latest
             artifact-name: awawapp-windows
 
@@ -41,7 +43,7 @@ jobs:
             mpv
 
       - name: Install macOS dependencies
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         run: brew install mpv
 
       # Windows: mpv is auto-downloaded by bundle-mpv.sh if not in PATH
@@ -84,7 +86,7 @@ jobs:
           prerelease: false
 
       - name: Repackage DMG with quarantine fix and README
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         run: bash scripts/package-dmg.sh
 
       - name: Upload artifacts

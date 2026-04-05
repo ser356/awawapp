@@ -24,7 +24,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem, CheckMenuItem};
 use tokio::sync::RwLock;
 use std::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Stores references to language CheckMenuItems for reliable toggling
 pub struct LanguageMenuItems {
@@ -498,19 +498,40 @@ async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
     //   macOS/Windows: bundled sidecar next to the main executable
     //   Linux: system mpv (from PATH), since .deb declares it as a dependency
     let mpv_path = {
+        // Tauri strips the target triple suffix when bundling sidecars.
+        // In the final .app bundle, the binary is just "mpv" not "mpv-aarch64-apple-darwin".
+        #[cfg(target_os = "windows")]
+        const MPV_NAMES: &[&str] = &["mpv.exe", "mpv-x86_64-pc-windows-msvc.exe"];
+        #[cfg(not(target_os = "windows"))]
+        const MPV_NAMES: &[&str] = &["mpv"];
+
         // First try: bundled sidecar next to the main executable
-        let sidecar = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
-            .map(|dir| {
-                #[cfg(target_os = "windows")]
-                let binary = dir.join("mpv.exe");
-                #[cfg(not(target_os = "windows"))]
-                let binary = dir.join("mpv");
-                binary
-            })
-            .filter(|p| p.exists())
-            .map(|p| p.to_string_lossy().to_string());
+        let exe_path = std::env::current_exe().ok();
+        info!("Current executable: {:?}", exe_path);
+        
+        let exe_dir = exe_path.as_ref().and_then(|exe| exe.parent().map(|d| d.to_path_buf()));
+        info!("Executable directory: {:?}", exe_dir);
+        
+        // Try each possible name
+        let sidecar = exe_dir.as_ref().and_then(|dir| {
+            for name in MPV_NAMES {
+                let path = dir.join(name);
+                info!("Checking for mpv at: {:?} (exists: {})", path, path.exists());
+                if path.exists() {
+                    info!("Found mpv sidecar at: {:?}", path);
+                    return Some(path.to_string_lossy().to_string());
+                }
+            }
+            // Log for debugging if not found
+            warn!("mpv sidecar not found in {:?}", dir);
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let files: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+                warn!("Directory contents: {:?}", files);
+            }
+            None
+        });
+
+        info!("mpv sidecar result: {:?}", sidecar);
 
         // On Linux, fall back to system mpv if sidecar not found
         #[cfg(target_os = "linux")]

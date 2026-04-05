@@ -85,13 +85,19 @@ async function initMpv() {
 
     // Resolve bundled mpv binary and config paths from the Tauri backend
     const mpvPaths = await invoke<{ mpv_path: string | null; config_dir: string | null }>('get_mpv_paths');
+    
+    console.log('mpvPaths received:', mpvPaths);
 
     // Build args - use bundled config dir if available
     const args = [
+      // IMPORTANT: wid=0 tells mpv to create its own window instead of
+      // embedding into the Tauri window (the bundled mpv doesn't support embedding)
+      '--wid=0',
       // Video output
       '--vo=gpu-next',
       '--hwdec=auto-safe',
-      // Window
+      // Window - force-window is REQUIRED for mpv to open a visible window
+      '--force-window=immediate',
       '--geometry=1280x720',
       '--autofit-larger=90%x90%',
       '--keep-open=yes',
@@ -113,9 +119,14 @@ async function initMpv() {
       args.push(`--config-dir=${mpvPaths.config_dir}`);
     }
 
+    // Validate mpv path - must use bundled binary, not system PATH
+    if (!mpvPaths.mpv_path) {
+      throw new Error('Bundled mpv not found. The app may be corrupted - please reinstall.');
+    }
+
     // mpv with uosc - modern beautiful controls IN the player
     const config: MpvConfig = {
-      path: mpvPaths.mpv_path ?? undefined,
+      path: mpvPaths.mpv_path,
       args,
       observedProperties: ['pause', 'eof-reached'],
       ipcTimeoutMs: 5000,
@@ -148,9 +159,17 @@ async function initMpv() {
     startHealthCheck();
   } catch (err) {
     console.error('mpv init error:', err);
-    errorMsg.value = String(err);
+    let errStr = String(err);
+    
+    // Provide better guidance for common macOS quarantine issue
+    if (errStr.includes('Timed out') && errStr.includes('IPC server')) {
+      errStr = t('player.quarantineError') || 
+        'mpv no pudo iniciar. En macOS, ejecuta: xattr -cr /Applications/awawapp.app';
+    }
+    
+    errorMsg.value = errStr;
     isLoading.value = false;
-    emit('error', String(err));
+    emit('error', errStr);
   }
 }
 

@@ -86,5 +86,6 @@ export default {
     seekingTo: 'Saltando a {time}...',
     seekFailed: 'Error al saltar. Prueba otra posición.',
     seekFar: 'Clic para saltar aquí (puede tardar)',
+    quarantineError: 'mpv no pudo iniciar. Ejecuta en Terminal: xattr -cr /Applications/awawapp.app',
   },
 };

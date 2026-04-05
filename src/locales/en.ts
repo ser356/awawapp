@@ -86,5 +86,6 @@ export default {
     seekingTo: 'Seeking to {time}...',
     seekFailed: 'Seek failed. Try a different position.',
     seekFar: 'Click to jump here (may take a moment)',
+    quarantineError: 'mpv failed to start. Run in Terminal: xattr -cr /Applications/awawapp.app',
   },
 };

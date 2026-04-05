@@ -261,10 +261,19 @@ echo ""
 if [ "$PLATFORM" = "macos" ]; then
     echo "── Step 3: Code signing (macOS) ──"
 
+    # Sign all dylibs
     find "$LIB_DIR" -name "*.dylib" | while read -r lib; do
         codesign --force --sign - "$lib" 2>/dev/null || echo "  Warning: failed to sign $(basename "$lib")"
     done
     echo "  Signed dylibs."
+
+    # Sign any frameworks/binaries without extension (e.g., Python)
+    find "$LIB_DIR" -type f ! -name "*.*" | while read -r bin; do
+        if file "$bin" | grep -q "Mach-O"; then
+            codesign --force --sign - "$bin" 2>/dev/null || echo "  Warning: failed to sign $(basename "$bin")"
+            echo "  Signed $(basename "$bin")"
+        fi
+    done
 
     codesign --force --sign - "$MPV_DEST" 2>/dev/null || echo "  Warning: failed to sign mpv"
     echo "  Signed mpv."
