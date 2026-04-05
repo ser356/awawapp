@@ -44,26 +44,7 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: brew install mpv
 
-      - name: Install Windows dependencies
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        run: |
-          # Fetch latest mpv build URL dynamically (shinchiro publishes daily)
-          MPV_URL=$(curl -s https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest \
-            | jq -r '.assets[] | select(.name | test("^mpv-x86_64-[0-9].*\\.7z$")) | .browser_download_url')
-          if [ -z "$MPV_URL" ] || [ "$MPV_URL" = "null" ]; then
-            echo "ERROR: Could not find mpv download URL from GitHub API"
-            exit 1
-          fi
-          echo "Downloading mpv from: $MPV_URL"
-          mkdir -p /tmp/mpv-win
-          curl -fsSL "$MPV_URL" -o /tmp/mpv-win/mpv.7z
-          7z x /tmp/mpv-win/mpv.7z -o/tmp/mpv-win/extracted
-          # Find where mpv.exe actually is (may be in a subdirectory)
-          MPV_DIR=$(dirname "$(find /tmp/mpv-win/extracted -name 'mpv.exe' -type f | head -1)")
-          echo "Found mpv.exe in: $MPV_DIR"
-          ls "$MPV_DIR"/mpv.exe
-          echo "$MPV_DIR" >> "$GITHUB_PATH"
+      # Windows: mpv is auto-downloaded by bundle-mpv.sh if not in PATH
 
       - name: Setup Node
         uses: actions/setup-node@v4
