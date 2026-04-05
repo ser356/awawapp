@@ -352,6 +352,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-mpv",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tempfile",
@@ -5450,6 +5451,22 @@ dependencies = [
  "tauri-utils",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-mpv"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf8376cbd3bd9010eaede301aba8d8135dd9e8524b385c1afee0bdd66ea5b173"
+dependencies = [
+ "libc",
+ "log",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   init,
   destroy,
   command,
-  setProperty,
-  getProperty,
   observeProperties,
   type MpvConfig,
 } from 'tauri-plugin-mpv-api';
 import Button from 'primevue/button';
-import Slider from 'primevue/slider';
 
 const { t } = useI18n();
 
@@ -25,374 +22,314 @@ const emit = defineEmits<{
   (e: 'error', message: string): void;
 }>();
 
-// Reactive state
-const isPlaying = ref(false);
-const currentTime = ref(0);
-const duration = ref(0);
-const volume = ref(100);
-const isReady = ref(false);
+const isLoading = ref(true);
 const errorMsg = ref<string | null>(null);
-const isInitializing = ref(true);
-
-// Computed
-const formattedTime = computed(() => formatTime(currentTime.value));
-const formattedDuration = computed(() => formatTime(duration.value));
-const progressPercent = computed(() =>
-  duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
-);
-
-const OBSERVED_PROPS = [
-  'pause',
-  'time-pos',
-  'duration',
-  'volume',
-  'eof-reached',
-] as const;
-
-function formatTime(secs: number): string {
-  if (!isFinite(secs) || secs < 0) return '0:00';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
-  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
+const isPlaying = ref(false);
 
 let unlistenProps: (() => void) | null = null;
+let healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 
-async function initMpv() {
+// Check if mpv is still alive by trying to get a property
+async function checkMpvAlive(): Promise<boolean> {
   try {
-    const config: MpvConfig = {
-      args: [
-        '--vo=gpu-next',
-        '--hwdec=auto-safe',
-        '--keep-open=yes',
-        '--force-window=yes',
-        '--osc=yes',
-        '--title=' + props.title,
-        '--volume=100',
-        '--cache=yes',
-        '--demuxer-max-bytes=150MiB',
-        '--demuxer-max-back-bytes=75MiB',
-      ],
-      observedProperties: OBSERVED_PROPS,
-      ipcTimeoutMs: 5000,
-    };
-
-    await init(config);
-    isReady.value = true;
-    isInitializing.value = false;
-
-    // Observe properties in real time
-    unlistenProps = await observeProperties(
-      OBSERVED_PROPS,
-      ({ name, data }) => {
-        switch (name) {
-          case 'pause':
-            isPlaying.value = !(data as boolean);
-            break;
-          case 'time-pos':
-            if (typeof data === 'number') currentTime.value = data;
-            break;
-          case 'duration':
-            if (typeof data === 'number') duration.value = data;
-            break;
-          case 'volume':
-            if (typeof data === 'number') volume.value = data;
-            break;
-          case 'eof-reached':
-            if (data === true) isPlaying.value = false;
-            break;
-        }
-      }
-    );
-
-    // Load the stream URL directly — no transcoding needed, mpv eats everything
-    await command('loadfile', [props.src]);
-    errorMsg.value = null;
-  } catch (err) {
-    console.error('mpv init error:', err);
-    errorMsg.value = String(err);
-    isInitializing.value = false;
-    emit('error', String(err));
+    await command('get_property', ['pause']);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-// === Controls ===
+// Start periodic health check to detect when user closes mpv window
+function startHealthCheck() {
+  healthCheckInterval = setInterval(async () => {
+    const alive = await checkMpvAlive();
+    if (!alive) {
+      console.log('mpv closed externally, cleaning up');
+      stopHealthCheck();
+      cleanupAndClose();
+    }
+  }, 1000); // Check every second
+}
 
-async function togglePlay() {
-  try {
-    const paused = await getProperty('pause');
-    await setProperty('pause', !paused);
-  } catch (err) {
-    console.error('togglePlay:', err);
+function stopHealthCheck() {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
   }
 }
 
-async function seek(percent: number) {
-  if (!duration.value) return;
-  const target = (percent / 100) * duration.value;
-  try {
-    await command('seek', [target.toString(), 'absolute']);
-  } catch (err) {
-    console.error('seek:', err);
-  }
-}
-
-async function seekRelative(seconds: number) {
-  try {
-    await command('seek', [seconds.toString(), 'relative']);
-  } catch (err) {
-    console.error('seekRelative:', err);
-  }
-}
-
-async function setVol(val: number | number[]) {
-  const v = Array.isArray(val) ? val[0] : val;
-  volume.value = v;
-  try {
-    await setProperty('volume', v);
-  } catch (err) {
-    console.error('setVolume:', err);
-  }
-}
-
-async function toggleFullscreen() {
-  try {
-    const fs = await getProperty('fullscreen');
-    await setProperty('fullscreen', !fs);
-  } catch (err) {
-    console.error('fullscreen:', err);
-  }
-}
-
-async function closeMpv() {
+async function cleanupAndClose() {
+  stopHealthCheck();
+  unlistenProps?.();
+  unlistenProps = null;
   try {
     await destroy();
   } catch {
-    // ignore — mpv may already be closed
+    // Ignore - already dead
   }
   emit('close');
 }
 
-// Keyboard shortcuts
-function handleKeydown(e: KeyboardEvent) {
-  if (e.target instanceof HTMLInputElement) return;
-  switch (e.code) {
-    case 'Space':     e.preventDefault(); togglePlay(); break;
-    case 'ArrowLeft': e.preventDefault(); seekRelative(-10); break;
-    case 'ArrowRight':e.preventDefault(); seekRelative(10); break;
-    case 'ArrowUp':   e.preventDefault(); setVol(Math.min(150, volume.value + 5)); break;
-    case 'ArrowDown': e.preventDefault(); setVol(Math.max(0, volume.value - 5)); break;
-    case 'KeyF':      e.preventDefault(); toggleFullscreen(); break;
-    case 'Escape':    closeMpv(); break;
+async function initMpv() {
+  try {
+    // Clean up any stale connection first
+    try {
+      await destroy();
+    } catch {
+      // Ignore - no previous connection
+    }
+    
+    // Small delay to ensure socket is cleaned up
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // mpv with uosc - modern beautiful controls IN the player
+    const config: MpvConfig = {
+      args: [
+        // Video output
+        '--vo=gpu-next',
+        '--hwdec=auto-safe',
+        // Window
+        '--geometry=1280x720',
+        '--autofit-larger=90%x90%',
+        '--keep-open=yes',
+        // Disable built-in OSC (we use uosc)
+        '--osc=no',
+        '--osd-bar=no',
+        '--osd-level=1',
+        // Cache for streaming
+        '--cache=yes',
+        '--demuxer-max-bytes=150MiB',
+        '--demuxer-max-back-bytes=75MiB',
+        // Title
+        `--title=${props.title}`,
+        `--force-media-title=${props.title}`,
+      ],
+      observedProperties: ['pause', 'eof-reached'],
+      ipcTimeoutMs: 5000,
+    };
+
+    await init(config);
+    
+    // Observe basic state to update our minimal UI
+    unlistenProps = await observeProperties(
+      ['pause', 'eof-reached'] as const,
+      ({ name, data }) => {
+        if (name === 'pause') {
+          isPlaying.value = !(data as boolean);
+        }
+        if (name === 'eof-reached' && data === true) {
+          // Video finished
+          isPlaying.value = false;
+        }
+      }
+    );
+
+    // Load the video
+    await command('loadfile', [props.src]);
+    
+    isLoading.value = false;
+    isPlaying.value = true;
+    errorMsg.value = null;
+    
+    // Start health check to detect when mpv closes
+    startHealthCheck();
+  } catch (err) {
+    console.error('mpv init error:', err);
+    errorMsg.value = String(err);
+    isLoading.value = false;
+    emit('error', String(err));
   }
 }
 
+async function closeMpv() {
+  stopHealthCheck();
+  try {
+    await command('quit', []);
+  } catch {
+    // Ignore - may already be closed
+  }
+  await cleanupAndClose();
+}
+
 onMounted(() => {
-  document.addEventListener('keydown', handleKeydown);
   initMpv();
 });
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown);
+  stopHealthCheck();
   unlistenProps?.();
   destroy().catch(() => {});
 });
 </script>
 
 <template>
-  <div class="mpv-controller">
-    <!-- Header -->
-    <div class="controller-header">
-      <Button icon="pi pi-arrow-left" text rounded @click="closeMpv" class="ctrl-btn" />
-      <div class="title-area">
-        <h3 class="video-title">{{ title }}</h3>
-        <span class="status" :class="{ playing: isPlaying, init: isInitializing }">
-          <template v-if="isInitializing">⏳ {{ t('player.buffering') }}</template>
-          <template v-else-if="errorMsg">❌ Error</template>
-          <template v-else-if="isPlaying">▶ {{ t('player.playing') || 'Reproduciendo en mpv' }}</template>
-          <template v-else>⏸ {{ t('player.paused') || 'Pausado' }}</template>
-        </span>
-      </div>
+  <div class="mpv-status">
+    <!-- Loading state -->
+    <div v-if="isLoading" class="status-card loading">
+      <i class="pi pi-spin pi-spinner"></i>
+      <span>{{ t('player.launching') || 'Abriendo reproductor...' }}</span>
     </div>
 
     <!-- Error state -->
-    <div v-if="errorMsg" class="error-panel">
+    <div v-else-if="errorMsg" class="status-card error">
       <i class="pi pi-exclamation-triangle"></i>
-      <p>{{ errorMsg }}</p>
-      <p class="hint">{{ t('player.installMpvHint') || 'Asegúrate de tener mpv instalado:' }} <code>brew install mpv</code></p>
-      <Button :label="t('player.retry') || 'Reintentar'" icon="pi pi-refresh" @click="initMpv" severity="secondary" />
+      <p class="error-msg">{{ errorMsg }}</p>
+      <p class="hint">
+        {{ t('player.installMpvHint') || 'mpv debe estar instalado:' }}
+        <code>brew install mpv</code>
+      </p>
+      <div class="error-actions">
+        <Button 
+          :label="t('player.retry') || 'Reintentar'" 
+          icon="pi pi-refresh" 
+          @click="initMpv" 
+          severity="secondary" 
+          size="small"
+        />
+        <Button 
+          :label="t('player.close') || 'Cerrar'" 
+          icon="pi pi-times" 
+          @click="$emit('close')" 
+          severity="secondary" 
+          text
+          size="small"
+        />
+      </div>
     </div>
 
-    <!-- Controls -->
-    <div v-else class="controls">
-      <!-- Progress bar -->
-      <div
-        class="progress-container"
-        @click="(e: MouseEvent) => seek((e.offsetX / (e.currentTarget as HTMLElement).clientWidth) * 100)"
-      >
-        <div class="progress-played" :style="{ width: progressPercent + '%' }"></div>
-        <div class="progress-handle" :style="{ left: progressPercent + '%' }"></div>
-      </div>
-
-      <!-- Buttons -->
-      <div class="controls-row">
-        <div class="left-controls">
-          <Button
-            :icon="isPlaying ? 'pi pi-pause' : 'pi pi-play'"
-            text rounded @click="togglePlay" class="ctrl-btn"
-          />
-          <Button icon="pi pi-replay" text rounded @click="seekRelative(-10)" class="ctrl-btn" v-tooltip.top="'-10s'" />
-          <Button icon="pi pi-forward" text rounded @click="seekRelative(10)" class="ctrl-btn" v-tooltip.top="'+10s'" />
-
-          <div class="volume-control">
-            <Button
-              :icon="volume === 0 ? 'pi pi-volume-off' : 'pi pi-volume-up'"
-              text rounded @click="setVol(volume === 0 ? 100 : 0)" class="ctrl-btn"
-            />
-            <Slider v-model="volume" :max="150" class="volume-slider" @update:modelValue="setVol" />
-          </div>
-
-          <span class="time-display">{{ formattedTime }} / {{ formattedDuration }}</span>
-        </div>
-
-        <div class="right-controls">
-          <Button icon="pi pi-window-maximize" text rounded @click="toggleFullscreen" class="ctrl-btn" v-tooltip.top="'Fullscreen (F)'" />
-          <Button icon="pi pi-times" text rounded @click="closeMpv" class="ctrl-btn close-btn" v-tooltip.top="'Cerrar (Esc)'" />
+    <!-- Playing state - mpv window is open with uosc controls -->
+    <div v-else class="status-card playing">
+      <div class="now-playing">
+        <i class="pi pi-play-circle" :class="{ paused: !isPlaying }"></i>
+        <div class="playing-info">
+          <span class="playing-label">
+            {{ isPlaying ? (t('player.nowPlaying') || 'Reproduciendo') : (t('player.paused') || 'Pausado') }}
+          </span>
+          <span class="playing-title">{{ title }}</span>
         </div>
       </div>
+      <p class="hint">
+        {{ t('player.controlsInPlayer') || 'Controles en la ventana del reproductor' }}
+      </p>
+      <Button 
+        :label="t('player.stopPlayback') || 'Detener'" 
+        icon="pi pi-stop" 
+        @click="closeMpv" 
+        severity="danger" 
+        outlined
+        size="small"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
-.mpv-controller {
+.mpv-status {
+  padding: 1rem;
+}
+
+.status-card {
   background: var(--surface-card, #1a1612);
   border: 1px solid var(--border-color, #3d352d);
   border-radius: 12px;
-  padding: 1.25rem;
-  margin: 1rem;
-  transition: all 0.3s ease;
+  padding: 1.5rem;
+  text-align: center;
 }
 
-.controller-header {
+.status-card.loading {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  color: var(--text-muted, #a09080);
 }
 
-.title-area {
-  flex: 1;
-  min-width: 0;
+.status-card.loading i {
+  font-size: 1.25rem;
+  color: var(--accent-color, #9d8a78);
 }
 
-.video-title {
-  margin: 0;
+.status-card.error {
+  color: #ff6b6b;
+}
+
+.status-card.error i {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.error-msg {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.hint {
+  color: var(--text-muted, #a09080);
+  font-size: 0.85rem;
+  margin: 0.75rem 0;
+}
+
+.hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.error-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.status-card.playing {
+  border-color: var(--accent-color, #9d8a78);
+}
+
+.now-playing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.now-playing i {
+  font-size: 2rem;
+  color: #66bb6a;
+  transition: color 0.3s;
+}
+
+.now-playing i.paused {
+  color: var(--accent-color, #9d8a78);
+}
+
+.playing-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.playing-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #66bb6a;
+}
+
+.now-playing i.paused + .playing-info .playing-label {
+  color: var(--accent-color, #9d8a78);
+}
+
+.playing-title {
   font-size: 1rem;
   font-weight: 500;
   color: var(--text-color, #f5f0ea);
+  max-width: 300px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.status {
-  font-size: 0.8rem;
-  color: var(--text-muted, #a09080);
-  transition: color 0.3s;
-}
-.status.playing { color: #66bb6a; }
-.status.init { color: #ffa726; }
-
-.ctrl-btn {
-  color: var(--text-color, #f5f0ea) !important;
-}
-.close-btn:hover {
-  color: #ff6b6b !important;
-}
-
-/* Error */
-.error-panel {
-  text-align: center;
-  padding: 2rem 1rem;
-  color: #ff6b6b;
-}
-.error-panel .hint {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  margin: 0.5rem 0 1rem;
-}
-.error-panel code {
-  background: rgba(255,255,255,0.08);
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-/* Progress bar */
-.progress-container {
-  position: relative;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 2px;
-  cursor: pointer;
-  margin-bottom: 1rem;
-  transition: height 0.15s;
-}
-.progress-container:hover { height: 6px; }
-
-.progress-played {
-  position: absolute;
-  top: 0; left: 0;
-  height: 100%;
-  background: var(--primary-color, #c9a882);
-  border-radius: 2px;
-  transition: width 0.1s linear;
-}
-
-.progress-handle {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 14px; height: 14px;
-  background: white;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity 0.15s;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-}
-.progress-container:hover .progress-handle { opacity: 1; }
-
-/* Controls row */
-.controls-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.left-controls, .right-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.volume-control {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.volume-slider { width: 80px; }
-.volume-slider :deep(.p-slider-range) { background: var(--primary-color, #c9a882); }
-.volume-slider :deep(.p-slider-handle) { background: white; border: none; width: 12px; height: 12px; }
-
-.time-display {
-  color: var(--text-muted, #a09080);
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-  margin-left: 0.5rem;
-  user-select: none;
 }
 </style>

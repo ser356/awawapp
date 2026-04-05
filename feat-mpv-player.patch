@@ -1,0 +1,633 @@
+From f213d05850fafe12196fa642d5e2766293dc3f38 Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Sat, 4 Apr 2026 23:42:49 +0000
+Subject: [PATCH] feat: replace HLS built-in player with mpv via
+ tauri-plugin-mpv
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Add tauri-plugin-mpv (JSON IPC) to Cargo.toml
+- Add tauri-plugin-mpv-api to package.json
+- Register mpv plugin in lib.rs Tauri builder
+- Add mpv:default permission to capabilities
+- New MpvPlayer.vue component (controls mpv via IPC)
+- Update FileSelector.vue: emit 'play' event instead of open_in_player
+- Integrate MpvPlayer in App.vue with play/close/error handlers
+
+mpv plays MKV/HEVC/AC3/DTS/ASS natively — no ffmpeg transcoding needed.
+Stream URL from librqbit goes directly to mpv.
+---
+ package.json                        |   1 +
+ src-tauri/Cargo.toml                |   5 +-
+ src-tauri/capabilities/default.json |  11 +-
+ src-tauri/src/lib.rs                |   1 +
+ src/App.vue                         |  38 ++-
+ src/components/FileSelector.vue     |  24 +-
+ src/components/MpvPlayer.vue        | 398 ++++++++++++++++++++++++++++
+ 7 files changed, 454 insertions(+), 24 deletions(-)
+ create mode 100644 src/components/MpvPlayer.vue
+
+diff --git a/package.json b/package.json
+index 87b62b5..785612a 100644
+--- a/package.json
++++ b/package.json
+@@ -17,6 +17,7 @@
+     "@tauri-apps/api": "^2",
+     "@tauri-apps/plugin-opener": "^2",
+     "@tauri-apps/plugin-shell": "^2",
++    "tauri-plugin-mpv-api": "^0.5",
+     "primeicons": "^7.0.0",
+     "primevue": "^4.5.4",
+     "vue": "^3.5.13",
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index c317a43..05f6d43 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -54,11 +54,14 @@ clap = { version = "4", features = ["derive"] }
+ indicatif = "0.17"
+ console = "0.15"
+ 
+-# HTTP server for streaming
++# HTTP server for streaming (kept for librqbit compatibility)
+ axum = "0.7"
+ tower-http = { version = "0.5", features = ["cors"] }
+ reqwest = { version = "0.11", features = ["json"] }
+ 
++# mpv player via JSON IPC
++tauri-plugin-mpv = "0.5"
++
+ # Window effects
+ window-vibrancy = "0.5"
+ 
+diff --git a/src-tauri/capabilities/default.json b/src-tauri/capabilities/default.json
+index 217e804..a9d30ca 100644
+--- a/src-tauri/capabilities/default.json
++++ b/src-tauri/capabilities/default.json
+@@ -9,15 +9,6 @@
+     "shell:allow-spawn",
+     "shell:allow-execute",
+     "shell:allow-open",
+-    {
+-      "identifier": "shell:allow-spawn",
+-      "allow": [
+-        {
+-          "name": "open-vlc",
+-          "cmd": "open",
+-          "args": true
+-        }
+-      ]
+-    }
++    "mpv:default"
+   ]
+ }
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 152a9f2..3a5032d 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -638,6 +638,7 @@ pub fn run() {
+     tauri::Builder::default()
+         .plugin(tauri_plugin_opener::init())
+         .plugin(tauri_plugin_shell::init())
++        .plugin(tauri_plugin_mpv::init())
+         .setup(|app| {
+             // Create native menu with Check for Updates in app menu
+             #[cfg(target_os = "macos")]
+diff --git a/src/App.vue b/src/App.vue
+index 7ccb84d..f81a5b0 100644
+--- a/src/App.vue
++++ b/src/App.vue
+@@ -8,6 +8,7 @@ import MagnetInput from './components/MagnetInput.vue';
+ import FileSelector from './components/FileSelector.vue';
+ import TorrentCard from './components/TorrentCard.vue';
+ import HistoryPanel from './components/HistoryPanel.vue';
++import MpvPlayer from './components/MpvPlayer.vue';
+ 
+ import Dialog from 'primevue/dialog';
+ import Button from 'primevue/button';
+@@ -28,6 +29,9 @@ const errorMessage = ref('');
+ const deleteConfirmId = ref<number | null>(null);
+ const showDeleteDialog = ref(false);
+ 
++// mpv player state
++const mpvPlayback = ref<{ url: string; title: string } | null>(null);
++
+ // Event listener cleanup
+ let unlistenStats: UnlistenFn | null = null;
+ 
+@@ -79,9 +83,27 @@ function onTorrentAdded(info: TorrentInfo) {
+ // Called when user starts streaming from FileSelector
+ function onStreamingStarted() {
+   // Keep the modal open so user can stream more files
+-  // Or close it:
+-  // showFileSelector.value = false;
+-  // selectedTorrent.value = null;
++}
++
++// Called when user clicks play — launch mpv
++function onPlay(data: { url: string; title: string; torrentId: number; fileIndex: number }) {
++  mpvPlayback.value = { url: data.url, title: data.title };
++  showFileSelector.value = false;
++}
++
++// Called when mpv player is closed
++function onMpvClose() {
++  mpvPlayback.value = null;
++}
++
++// Handle mpv player error
++function onMpvError(msg: string) {
++  toast.add({
++    severity: 'error',
++    summary: 'Player Error',
++    detail: msg,
++    life: 5000,
++  });
+ }
+ 
+ // Cancel file selection
+@@ -343,10 +365,20 @@ onUnmounted(() => {
+           <FileSelector
+             :torrent="selectedTorrent"
+             @streaming-started="onStreamingStarted"
++            @play="onPlay"
+             @cancel="cancelFileSelection"
+           />
+         </Dialog>
+         
++        <!-- mpv Player Controller -->
++        <MpvPlayer
++          v-if="mpvPlayback"
++          :src="mpvPlayback.url"
++          :title="mpvPlayback.title"
++          @close="onMpvClose"
++          @error="onMpvError"
++        />
++        
+         <!-- Delete Confirmation Dialog -->
+         <Dialog
+           v-model:visible="showDeleteDialog"
+diff --git a/src/components/FileSelector.vue b/src/components/FileSelector.vue
+index 7ec4883..2ea9c45 100644
+--- a/src/components/FileSelector.vue
++++ b/src/components/FileSelector.vue
+@@ -15,6 +15,7 @@ const props = defineProps<{
+ const emit = defineEmits<{
+   (e: 'cancel'): void;
+   (e: 'streaming-started'): void;
++  (e: 'play', data: { url: string; title: string; torrentId: number; fileIndex: number }): void;
+ }>();
+ 
+ const loadingFile = ref<number | null>(null);
+@@ -63,7 +64,7 @@ async function getStreamUrl(fileIndex: number): Promise<string | null> {
+   return result.data;
+ }
+ 
+-async function playInVLC(fileIndex: number) {
++async function playFile(fileIndex: number) {
+   if (!props.torrent) return;
+   loadingFile.value = fileIndex;
+   
+@@ -74,13 +75,16 @@ async function playInVLC(fileIndex: number) {
+       return;
+     }
+     
+-    // Open in best available player (VLC → mpv → system default)
+-    const playerResult = await invoke<CommandResult<void>>('open_in_player', { url: streamUrl });
+-
+-    if (!playerResult.success) {
+-      console.error('Player open failed:', playerResult.error);
+-      alert(t('fileSelector.noPlayerFound', { url: streamUrl }));
+-    }
++    const file = props.torrent.files.find(f => f.index === fileIndex);
++    const title = file?.path.split('/').pop() || props.torrent.name;
++    
++    // Emit play event — MpvPlayer will handle playback
++    emit('play', {
++      url: streamUrl,
++      title,
++      torrentId: props.torrent.id,
++      fileIndex,
++    });
+     
+     emit('streaming-started');
+   } catch (err) {
+@@ -127,9 +131,9 @@ async function playInVLC(fileIndex: number) {
+         </div>
+         <div class="file-actions">
+           <Button
+-            :label="t('player.playInVLC')"
++            :label="'▶ ' + (t('player.play') || 'Reproducir')"
+             icon="pi pi-play"
+-            @click="playInVLC(file.index)"
++            @click="playFile(file.index)"
+             size="small"
+             :loading="loadingFile === file.index"
+           />
+diff --git a/src/components/MpvPlayer.vue b/src/components/MpvPlayer.vue
+new file mode 100644
+index 0000000..f01b55e
+--- /dev/null
++++ b/src/components/MpvPlayer.vue
+@@ -0,0 +1,398 @@
++<script setup lang="ts">
++import { ref, onMounted, onUnmounted, computed } from 'vue';
++import { useI18n } from 'vue-i18n';
++import {
++  init,
++  destroy,
++  command,
++  setProperty,
++  getProperty,
++  observeProperties,
++  type MpvConfig,
++} from 'tauri-plugin-mpv-api';
++import Button from 'primevue/button';
++import Slider from 'primevue/slider';
++
++const { t } = useI18n();
++
++const props = defineProps<{
++  src: string;
++  title: string;
++}>();
++
++const emit = defineEmits<{
++  (e: 'close'): void;
++  (e: 'error', message: string): void;
++}>();
++
++// Reactive state
++const isPlaying = ref(false);
++const currentTime = ref(0);
++const duration = ref(0);
++const volume = ref(100);
++const isReady = ref(false);
++const errorMsg = ref<string | null>(null);
++const isInitializing = ref(true);
++
++// Computed
++const formattedTime = computed(() => formatTime(currentTime.value));
++const formattedDuration = computed(() => formatTime(duration.value));
++const progressPercent = computed(() =>
++  duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
++);
++
++const OBSERVED_PROPS = [
++  'pause',
++  'time-pos',
++  'duration',
++  'volume',
++  'eof-reached',
++] as const;
++
++function formatTime(secs: number): string {
++  if (!isFinite(secs) || secs < 0) return '0:00';
++  const h = Math.floor(secs / 3600);
++  const m = Math.floor((secs % 3600) / 60);
++  const s = Math.floor(secs % 60);
++  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
++  return `${m}:${s.toString().padStart(2, '0')}`;
++}
++
++let unlistenProps: (() => void) | null = null;
++
++async function initMpv() {
++  try {
++    const config: MpvConfig = {
++      args: [
++        '--vo=gpu-next',
++        '--hwdec=auto-safe',
++        '--keep-open=yes',
++        '--force-window=yes',
++        '--osc=yes',
++        '--title=' + props.title,
++        '--volume=100',
++        '--cache=yes',
++        '--demuxer-max-bytes=150MiB',
++        '--demuxer-max-back-bytes=75MiB',
++      ],
++      observedProperties: OBSERVED_PROPS,
++      ipcTimeoutMs: 5000,
++    };
++
++    await init(config);
++    isReady.value = true;
++    isInitializing.value = false;
++
++    // Observe properties in real time
++    unlistenProps = await observeProperties(
++      OBSERVED_PROPS,
++      ({ name, data }) => {
++        switch (name) {
++          case 'pause':
++            isPlaying.value = !(data as boolean);
++            break;
++          case 'time-pos':
++            if (typeof data === 'number') currentTime.value = data;
++            break;
++          case 'duration':
++            if (typeof data === 'number') duration.value = data;
++            break;
++          case 'volume':
++            if (typeof data === 'number') volume.value = data;
++            break;
++          case 'eof-reached':
++            if (data === true) isPlaying.value = false;
++            break;
++        }
++      }
++    );
++
++    // Load the stream URL directly — no transcoding needed, mpv eats everything
++    await command('loadfile', [props.src]);
++    errorMsg.value = null;
++  } catch (err) {
++    console.error('mpv init error:', err);
++    errorMsg.value = String(err);
++    isInitializing.value = false;
++    emit('error', String(err));
++  }
++}
++
++// === Controls ===
++
++async function togglePlay() {
++  try {
++    const paused = await getProperty('pause');
++    await setProperty('pause', !paused);
++  } catch (err) {
++    console.error('togglePlay:', err);
++  }
++}
++
++async function seek(percent: number) {
++  if (!duration.value) return;
++  const target = (percent / 100) * duration.value;
++  try {
++    await command('seek', [target.toString(), 'absolute']);
++  } catch (err) {
++    console.error('seek:', err);
++  }
++}
++
++async function seekRelative(seconds: number) {
++  try {
++    await command('seek', [seconds.toString(), 'relative']);
++  } catch (err) {
++    console.error('seekRelative:', err);
++  }
++}
++
++async function setVol(val: number | number[]) {
++  const v = Array.isArray(val) ? val[0] : val;
++  volume.value = v;
++  try {
++    await setProperty('volume', v);
++  } catch (err) {
++    console.error('setVolume:', err);
++  }
++}
++
++async function toggleFullscreen() {
++  try {
++    const fs = await getProperty('fullscreen');
++    await setProperty('fullscreen', !fs);
++  } catch (err) {
++    console.error('fullscreen:', err);
++  }
++}
++
++async function closeMpv() {
++  try {
++    await destroy();
++  } catch {
++    // ignore — mpv may already be closed
++  }
++  emit('close');
++}
++
++// Keyboard shortcuts
++function handleKeydown(e: KeyboardEvent) {
++  if (e.target instanceof HTMLInputElement) return;
++  switch (e.code) {
++    case 'Space':     e.preventDefault(); togglePlay(); break;
++    case 'ArrowLeft': e.preventDefault(); seekRelative(-10); break;
++    case 'ArrowRight':e.preventDefault(); seekRelative(10); break;
++    case 'ArrowUp':   e.preventDefault(); setVol(Math.min(150, volume.value + 5)); break;
++    case 'ArrowDown': e.preventDefault(); setVol(Math.max(0, volume.value - 5)); break;
++    case 'KeyF':      e.preventDefault(); toggleFullscreen(); break;
++    case 'Escape':    closeMpv(); break;
++  }
++}
++
++onMounted(() => {
++  document.addEventListener('keydown', handleKeydown);
++  initMpv();
++});
++
++onUnmounted(() => {
++  document.removeEventListener('keydown', handleKeydown);
++  unlistenProps?.();
++  destroy().catch(() => {});
++});
++</script>
++
++<template>
++  <div class="mpv-controller">
++    <!-- Header -->
++    <div class="controller-header">
++      <Button icon="pi pi-arrow-left" text rounded @click="closeMpv" class="ctrl-btn" />
++      <div class="title-area">
++        <h3 class="video-title">{{ title }}</h3>
++        <span class="status" :class="{ playing: isPlaying, init: isInitializing }">
++          <template v-if="isInitializing">⏳ {{ t('player.buffering') }}</template>
++          <template v-else-if="errorMsg">❌ Error</template>
++          <template v-else-if="isPlaying">▶ {{ t('player.playing') || 'Reproduciendo en mpv' }}</template>
++          <template v-else>⏸ {{ t('player.paused') || 'Pausado' }}</template>
++        </span>
++      </div>
++    </div>
++
++    <!-- Error state -->
++    <div v-if="errorMsg" class="error-panel">
++      <i class="pi pi-exclamation-triangle"></i>
++      <p>{{ errorMsg }}</p>
++      <p class="hint">{{ t('player.installMpvHint') || 'Asegúrate de tener mpv instalado:' }} <code>brew install mpv</code></p>
++      <Button :label="t('player.retry') || 'Reintentar'" icon="pi pi-refresh" @click="initMpv" severity="secondary" />
++    </div>
++
++    <!-- Controls -->
++    <div v-else class="controls">
++      <!-- Progress bar -->
++      <div
++        class="progress-container"
++        @click="(e: MouseEvent) => seek((e.offsetX / (e.currentTarget as HTMLElement).clientWidth) * 100)"
++      >
++        <div class="progress-played" :style="{ width: progressPercent + '%' }"></div>
++        <div class="progress-handle" :style="{ left: progressPercent + '%' }"></div>
++      </div>
++
++      <!-- Buttons -->
++      <div class="controls-row">
++        <div class="left-controls">
++          <Button
++            :icon="isPlaying ? 'pi pi-pause' : 'pi pi-play'"
++            text rounded @click="togglePlay" class="ctrl-btn"
++          />
++          <Button icon="pi pi-replay" text rounded @click="seekRelative(-10)" class="ctrl-btn" v-tooltip.top="'-10s'" />
++          <Button icon="pi pi-forward" text rounded @click="seekRelative(10)" class="ctrl-btn" v-tooltip.top="'+10s'" />
++
++          <div class="volume-control">
++            <Button
++              :icon="volume === 0 ? 'pi pi-volume-off' : 'pi pi-volume-up'"
++              text rounded @click="setVol(volume === 0 ? 100 : 0)" class="ctrl-btn"
++            />
++            <Slider v-model="volume" :max="150" class="volume-slider" @update:modelValue="setVol" />
++          </div>
++
++          <span class="time-display">{{ formattedTime }} / {{ formattedDuration }}</span>
++        </div>
++
++        <div class="right-controls">
++          <Button icon="pi pi-window-maximize" text rounded @click="toggleFullscreen" class="ctrl-btn" v-tooltip.top="'Fullscreen (F)'" />
++          <Button icon="pi pi-times" text rounded @click="closeMpv" class="ctrl-btn close-btn" v-tooltip.top="'Cerrar (Esc)'" />
++        </div>
++      </div>
++    </div>
++  </div>
++</template>
++
++<style scoped>
++.mpv-controller {
++  background: var(--surface-card, #1a1612);
++  border: 1px solid var(--border-color, #3d352d);
++  border-radius: 12px;
++  padding: 1.25rem;
++  margin: 1rem;
++  transition: all 0.3s ease;
++}
++
++.controller-header {
++  display: flex;
++  align-items: center;
++  gap: 0.75rem;
++  margin-bottom: 1rem;
++}
++
++.title-area {
++  flex: 1;
++  min-width: 0;
++}
++
++.video-title {
++  margin: 0;
++  font-size: 1rem;
++  font-weight: 500;
++  color: var(--text-color, #f5f0ea);
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++.status {
++  font-size: 0.8rem;
++  color: var(--text-muted, #a09080);
++  transition: color 0.3s;
++}
++.status.playing { color: #66bb6a; }
++.status.init { color: #ffa726; }
++
++.ctrl-btn {
++  color: var(--text-color, #f5f0ea) !important;
++}
++.close-btn:hover {
++  color: #ff6b6b !important;
++}
++
++/* Error */
++.error-panel {
++  text-align: center;
++  padding: 2rem 1rem;
++  color: #ff6b6b;
++}
++.error-panel .hint {
++  color: var(--text-muted);
++  font-size: 0.85rem;
++  margin: 0.5rem 0 1rem;
++}
++.error-panel code {
++  background: rgba(255,255,255,0.08);
++  padding: 0.2rem 0.5rem;
++  border-radius: 4px;
++  font-size: 0.85rem;
++}
++
++/* Progress bar */
++.progress-container {
++  position: relative;
++  height: 4px;
++  background: rgba(255, 255, 255, 0.12);
++  border-radius: 2px;
++  cursor: pointer;
++  margin-bottom: 1rem;
++  transition: height 0.15s;
++}
++.progress-container:hover { height: 6px; }
++
++.progress-played {
++  position: absolute;
++  top: 0; left: 0;
++  height: 100%;
++  background: var(--primary-color, #c9a882);
++  border-radius: 2px;
++  transition: width 0.1s linear;
++}
++
++.progress-handle {
++  position: absolute;
++  top: 50%;
++  transform: translate(-50%, -50%);
++  width: 14px; height: 14px;
++  background: white;
++  border-radius: 50%;
++  opacity: 0;
++  transition: opacity 0.15s;
++  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
++}
++.progress-container:hover .progress-handle { opacity: 1; }
++
++/* Controls row */
++.controls-row {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++}
++
++.left-controls, .right-controls {
++  display: flex;
++  align-items: center;
++  gap: 0.4rem;
++}
++
++.volume-control {
++  display: flex;
++  align-items: center;
++  gap: 0.5rem;
++}
++
++.volume-slider { width: 80px; }
++.volume-slider :deep(.p-slider-range) { background: var(--primary-color, #c9a882); }
++.volume-slider :deep(.p-slider-handle) { background: white; border: none; width: 12px; height: 12px; }
++
++.time-display {
++  color: var(--text-muted, #a09080);
++  font-size: 0.85rem;
++  font-variant-numeric: tabular-nums;
++  margin-left: 0.5rem;
++  user-select: none;
++}
++</style>
+-- 
+2.43.0
+

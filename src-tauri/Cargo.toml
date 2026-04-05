@@ -59,7 +59,7 @@ axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
 reqwest = { version = "0.11", features = ["json"] }
 
-# mpv player via JSON IPC
+# mpv player via subprocess (overlay mode)
 tauri-plugin-mpv = "0.5"
 
 # Window effects
