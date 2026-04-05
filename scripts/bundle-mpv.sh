@@ -1,30 +1,31 @@
 #!/bin/bash
-# bundle-mpv.sh — Copy mpv binary for bundling in awawapp
+# bundle-mpv.sh — Bundle mpv + uosc for standalone awawapp
 #
-# This script copies mpv from Homebrew to the Tauri binaries directory.
+# This script prepares the mpv sidecar binary and uosc scripts
+# so the final .app is fully self-contained (no brew install needed).
 #
 # Usage:
 #   ./scripts/bundle-mpv.sh
 #
-# Prerequisites:
+# What it does:
+#   1. Copies mpv binary from system PATH to src-tauri/binaries/
+#   2. Downloads uosc (mpv modern UI) to src-tauri/mpv-config/scripts/uosc/
+#   3. Ad-hoc code signs the binary for macOS
+#
+# Prerequisites (build machine only):
 #   brew install mpv
 #
-# After running, you should have:
-#   - src-tauri/binaries/mpv-{target-triple}
-#
-# Note: This copies just the mpv binary. The binary will link against
-# system-installed dylibs. For full redistribution, users need mpv
-# installed via Homebrew, or the app will fall back to detecting
-# system-installed mpv.
-#
-# For a fully standalone bundle, use bundle-mpv-full.sh (requires
-# dylibbundler or manual dylib handling).
+# After running, the user does NOT need mpv installed.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/src-tauri/binaries"
+MPV_CONFIG_DIR="$PROJECT_ROOT/src-tauri/mpv-config"
+
+# uosc version to bundle
+UOSC_VERSION="5.12.0"
 
 # Detect architecture
 ARCH="$(uname -m)"
@@ -34,48 +35,137 @@ else
     TARGET_TRIPLE="x86_64-apple-darwin"
 fi
 
-echo "=== bundling mpv for awawapp (${TARGET_TRIPLE}) ==="
+echo "=== Bundle mpv + uosc for awawapp (${TARGET_TRIPLE}) ==="
+echo ""
 
-# Find mpv binary
+# ── Step 1: Bundle mpv binary ───────────────────────────────────────────────
+
+echo "── Step 1: mpv binary ──"
+
 MPV_BIN="$(which mpv || true)"
 if [ -z "$MPV_BIN" ]; then
-    echo "❌ mpv not found. Please install it first:"
-    echo "   brew install mpv"
+    echo "ERROR: mpv not found in PATH."
+    echo "  Install it on the build machine: brew install mpv"
+    echo "  (End users will NOT need this — the binary gets bundled.)"
     exit 1
 fi
 
-echo "✓ Found mpv at: $MPV_BIN"
+echo "  Found mpv at: $MPV_BIN"
 
-# Create directories
 mkdir -p "$BINARIES_DIR"
 
-# Copy mpv binary with Tauri naming convention
 MPV_DEST="$BINARIES_DIR/mpv-${TARGET_TRIPLE}"
-echo "→ Copying mpv binary to: $MPV_DEST"
+echo "  Copying to: $MPV_DEST"
 cp "$MPV_BIN" "$MPV_DEST"
 chmod +x "$MPV_DEST"
 
-# Ad-hoc code sign
-echo "→ Code signing..."
-codesign --force --sign - "$MPV_DEST" 2>/dev/null || echo "   ⚠️  Signing failed (may need manual signing)"
+# Ad-hoc code sign (required for macOS arm64)
+echo "  Code signing..."
+codesign --force --sign - "$MPV_DEST" 2>/dev/null || echo "  Warning: signing failed (may need manual signing)"
 
-# List dependencies (informational)
+echo "  Done."
 echo ""
-echo "=== mpv dependencies (informational) ==="
-otool -L "$MPV_BIN" | grep -v '/System/' | grep -v '/usr/lib/' | head -20 || true
+
+# ── Step 2: Bundle uosc scripts ─────────────────────────────────────────────
+
+echo "── Step 2: uosc v${UOSC_VERSION} ──"
+
+UOSC_DIR="$MPV_CONFIG_DIR/scripts/uosc"
+UOSC_ZIP_URL="https://github.com/tomasklaen/uosc/releases/download/${UOSC_VERSION}/uosc.zip"
+TMP_DIR="$(mktemp -d)"
+
+# Clean previous uosc if exists
+if [ -d "$UOSC_DIR" ]; then
+    echo "  Removing old uosc..."
+    rm -rf "$UOSC_DIR"
+fi
+
+echo "  Downloading uosc v${UOSC_VERSION}..."
+if curl -fsSL "$UOSC_ZIP_URL" -o "$TMP_DIR/uosc.zip"; then
+    echo "  Extracting..."
+    unzip -q "$TMP_DIR/uosc.zip" -d "$TMP_DIR/uosc-extracted"
+
+    # uosc zip contains scripts/uosc/ directory structure
+    if [ -d "$TMP_DIR/uosc-extracted/scripts/uosc" ]; then
+        mkdir -p "$MPV_CONFIG_DIR/scripts"
+        cp -R "$TMP_DIR/uosc-extracted/scripts/uosc" "$UOSC_DIR"
+        echo "  Installed uosc scripts to: $UOSC_DIR"
+    elif [ -d "$TMP_DIR/uosc-extracted/uosc" ]; then
+        # Some releases have flat structure
+        mkdir -p "$MPV_CONFIG_DIR/scripts"
+        cp -R "$TMP_DIR/uosc-extracted/uosc" "$UOSC_DIR"
+        echo "  Installed uosc scripts to: $UOSC_DIR"
+    else
+        echo "  Warning: unexpected uosc zip structure. Contents:"
+        ls -la "$TMP_DIR/uosc-extracted/"
+        # Try to find and copy whatever lua files exist
+        mkdir -p "$UOSC_DIR"
+        find "$TMP_DIR/uosc-extracted" -name "*.lua" -exec cp {} "$UOSC_DIR/" \;
+        echo "  Copied lua files to: $UOSC_DIR"
+    fi
+
+    # If the zip also contains script-opts, don't overwrite ours (we have custom theme)
+    echo "  Keeping custom awawapp uosc.conf (not overwriting with default)"
+else
+    echo "  Warning: Failed to download uosc. Trying local fallback..."
+    # Check if uosc is installed locally on the build machine
+    LOCAL_UOSC="$HOME/.config/mpv/scripts/uosc"
+    if [ -d "$LOCAL_UOSC" ]; then
+        mkdir -p "$MPV_CONFIG_DIR/scripts"
+        cp -R "$LOCAL_UOSC" "$UOSC_DIR"
+        echo "  Copied local uosc from: $LOCAL_UOSC"
+    else
+        echo "  ERROR: Could not download or find uosc."
+        echo "  The app will work without uosc but with basic mpv controls."
+    fi
+fi
+
+# Cleanup
+rm -rf "$TMP_DIR"
+
+echo "  Done."
+echo ""
+
+# ── Step 3: Verify bundle ───────────────────────────────────────────────────
+
+echo "── Verification ──"
+
+echo "  mpv binary:"
+if [ -f "$MPV_DEST" ]; then
+    echo "    OK: $MPV_DEST ($(du -h "$MPV_DEST" | cut -f1))"
+else
+    echo "    MISSING: $MPV_DEST"
+fi
+
+echo "  uosc scripts:"
+if [ -d "$UOSC_DIR" ]; then
+    UOSC_FILES=$(find "$UOSC_DIR" -name "*.lua" | wc -l | tr -d ' ')
+    echo "    OK: $UOSC_DIR ($UOSC_FILES lua files)"
+else
+    echo "    MISSING: $UOSC_DIR"
+fi
+
+echo "  mpv config:"
+if [ -f "$MPV_CONFIG_DIR/mpv.conf" ]; then
+    echo "    OK: $MPV_CONFIG_DIR/mpv.conf"
+else
+    echo "    MISSING: $MPV_CONFIG_DIR/mpv.conf"
+fi
+
+echo "  uosc config:"
+if [ -f "$MPV_CONFIG_DIR/script-opts/uosc.conf" ]; then
+    echo "    OK: $MPV_CONFIG_DIR/script-opts/uosc.conf"
+else
+    echo "    MISSING: $MPV_CONFIG_DIR/script-opts/uosc.conf"
+fi
 
 echo ""
 echo "=== Bundle complete ==="
-echo "Binary: $MPV_DEST"
 echo ""
-echo "Note: This bundled mpv binary links against Homebrew dylibs."
-echo "For the app to work without mpv installed, you would need to:"
-echo "  1. Use dylibbundler to copy and relink all dependencies"
-echo "  2. Or bundle mpv as a .framework"
+echo "mpv dependencies (for reference):"
+otool -L "$MPV_DEST" 2>/dev/null | grep -v '/System/' | grep -v '/usr/lib/' | head -10 || true
 echo ""
-echo "For development/testing, the app will:"
-echo "  1. Try to use the bundled binary first"
-echo "  2. Fall back to system-installed mpv in PATH"
+echo "Note: The bundled mpv links against Homebrew dylibs."
+echo "For fully portable builds, use dylibbundler to relink dependencies."
 echo ""
-echo "Next steps:"
-echo "  npm run tauri dev"
+echo "Next: npm run tauri:build"

@@ -482,6 +482,48 @@ async fn open_in_player(url: String) -> Result<CommandResult<()>, String> {
     }
 }
 
+/// Paths for the bundled mpv player
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MpvPaths {
+    pub mpv_path: Option<String>,
+    pub config_dir: Option<String>,
+}
+
+/// Get paths for the bundled mpv binary and config directory.
+/// The frontend uses these to launch mpv with the correct binary and config.
+#[tauri::command]
+async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
+    // Resolve sidecar binary path.
+    // Tauri places externalBin sidecars next to the main executable.
+    let mpv_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+        .map(|dir| {
+            #[cfg(target_os = "windows")]
+            let binary = dir.join("mpv.exe");
+            #[cfg(not(target_os = "windows"))]
+            let binary = dir.join("mpv");
+            binary
+        })
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string());
+
+    // Resolve config directory from bundled resources.
+    // Tauri bundles resources into <app>/Contents/Resources/ on macOS.
+    let config_dir = app.path().resource_dir()
+        .ok()
+        .map(|dir| dir.join("mpv-config"))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string());
+
+    info!(
+        "mpv paths - binary: {:?}, config: {:?}",
+        mpv_path, config_dir
+    );
+
+    Ok(MpvPaths { mpv_path, config_dir })
+}
+
 /// Set the language menu checkmarks to match the current language
 #[tauri::command]
 async fn set_menu_language(app: AppHandle, lang: String) -> Result<(), String> {
@@ -786,6 +828,7 @@ pub fn run() {
             open_in_player,
             check_player_installed,
             set_menu_language,
+            get_mpv_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

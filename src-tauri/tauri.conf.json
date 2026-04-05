@@ -30,7 +30,8 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/awaw"
+      "binaries/awaw",
+      "binaries/mpv"
     ],
     "resources": [
       "lib/**/*",

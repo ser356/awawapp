@@ -14,13 +14,17 @@ TARGET_TRIPLE=$(rustc -vV | grep host | cut -d ' ' -f2)
 
 echo "Building awaw CLI for $TARGET_TRIPLE..."
 
-# Ensure binaries directory exists with a placeholder
-# (Tauri build.rs checks for the file before cargo compiles)
+# Ensure binaries directory exists with placeholders
+# (Tauri build.rs checks for sidecar files before cargo compiles)
 mkdir -p "$BINARIES_DIR"
 BINARY_PATH="$BINARIES_DIR/awaw-$TARGET_TRIPLE"
+MPV_BINARY_PATH="$BINARIES_DIR/mpv-$TARGET_TRIPLE"
 
 if [ ! -f "$BINARY_PATH" ]; then
     touch "$BINARY_PATH"
+fi
+if [ ! -f "$MPV_BINARY_PATH" ]; then
+    touch "$MPV_BINARY_PATH"
 fi
 
 # Build the CLI in release mode

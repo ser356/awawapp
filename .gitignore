@@ -25,3 +25,7 @@ dist-ssr
 
 # Sidecar binaries (built during CI)
 src-tauri/binaries/awaw-*
+src-tauri/binaries/mpv-*
+
+# uosc scripts (downloaded by scripts/bundle-mpv.sh)
+src-tauri/mpv-config/scripts/uosc/
