@@ -191,81 +191,20 @@ case "$PLATFORM" in
         ;;
 
     linux)
-        # Linux: use ldd + patchelf
-        # In the AppImage/deb: binary and libs are colocated or use $ORIGIN rpath
+        # Linux: mpv has deep dependency trees (glib, cairo, icu, ffmpeg, etc.)
+        # that are tightly coupled to the system. Bundling them all causes
+        # version conflicts and bloats the package (~100MB+ of .so files).
         #
-        # Tauri on Linux puts externalBin next to the main binary and
-        # resources under <prefix>/lib/<app>/  — we use $ORIGIN/../lib/<app>/ for libs.
-        # Simpler approach: put libs next to the binary and use $ORIGIN.
-
-        if ! command -v patchelf &>/dev/null; then
-            echo "  WARNING: patchelf not found. Install it for fully portable builds:"
-            echo "    sudo apt install patchelf"
-            echo "  Skipping library bundling — mpv will use system libs at runtime."
-        else
-            collect_nonsystem_so() {
-                local binary="$1"
-                ldd "$binary" 2>/dev/null | grep "=> /" | awk '{print $3}' | while read -r lib; do
-                    # Skip system/core libs that are guaranteed on any Linux
-                    case "$lib" in
-                        /usr/lib/x86_64-linux-gnu/ld-linux*|/lib/x86_64-linux-gnu/ld-linux*)
-                            continue ;;
-                    esac
-                    local libname
-                    libname="$(basename "$lib")"
-                    case "$libname" in
-                        libc.so*|libm.so*|libdl.so*|librt.so*|libpthread.so*|libstdc++.so*|libgcc_s.so*|ld-linux*)
-                            continue ;;
-                        libX11.so*|libxcb.so*|libdrm.so*|libGL.so*|libEGL.so*|libvulkan.so*|libwayland*.so*)
-                            # GPU/display libs must come from the user's system
-                            continue ;;
-                    esac
-                    echo "$lib"
-                done
-            }
-
-            bundle_linux_recursive() {
-                local binary="$1"
-                local deps
-                deps="$(collect_nonsystem_so "$binary")"
-                [ -z "$deps" ] && return
-
-                echo "$deps" | while read -r dep_path; do
-                    local dep_name
-                    dep_name="$(basename "$dep_path")"
-
-                    [ -f "$LIB_DIR/$dep_name" ] && continue
-
-                    local real_path="$dep_path"
-                    [ -L "$dep_path" ] && real_path="$(readlink -f "$dep_path")"
-
-                    if [ ! -f "$real_path" ]; then
-                        echo "    WARNING: not found: $dep_path"
-                        continue
-                    fi
-
-                    echo "    Bundling: $dep_name"
-                    cp "$real_path" "$LIB_DIR/$dep_name"
-                    chmod u+w "$LIB_DIR/$dep_name"
-
-                    bundle_linux_recursive "$LIB_DIR/$dep_name"
-                done
-            }
-
-            echo "  Scanning mpv dependencies (Linux)..."
-            bundle_linux_recursive "$MPV_DEST"
-
-            # Set RPATH on mpv binary to find bundled libs
-            # Tauri puts resources in ../lib/<appname>/ relative to the binary
-            patchelf --set-rpath '$ORIGIN/../lib/awawapp' "$MPV_DEST" 2>/dev/null || \
-                patchelf --set-rpath '$ORIGIN' "$MPV_DEST" 2>/dev/null || \
-                echo "    WARNING: failed to set rpath on mpv"
-
-            # Also set rpath on each bundled lib so they can find each other
-            find "$LIB_DIR" -name "*.so*" | while read -r lib; do
-                patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
-            done
-        fi
+        # Instead, we rely on package-level dependencies:
+        #   - .deb: Depends: mpv (declared in tauri.conf.json)
+        #   - .rpm: Requires: mpv
+        #   - AppImage: system mpv must be installed
+        #
+        # The mpv binary we bundle is just the one from the build system;
+        # at runtime it will use the system's shared libraries.
+        echo "  Linux: skipping library bundling (using system package dependencies)"
+        echo "  The .deb/.rpm will declare 'mpv' as a package dependency."
+        echo "  Users install mpv via: sudo apt install mpv (or equivalent)"
         ;;
 
     windows)

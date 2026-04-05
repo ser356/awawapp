@@ -38,8 +38,7 @@ jobs:
             patchelf \
             libssl-dev \
             pkg-config \
-            mpv \
-            libmpv-dev
+            mpv
 
       - name: Install macOS dependencies
         if: matrix.platform == 'macos-latest'

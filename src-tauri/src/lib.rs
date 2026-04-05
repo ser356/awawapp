@@ -517,28 +517,6 @@ async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().to_string());
 
-    // On Linux, set LD_LIBRARY_PATH so mpv can find bundled .so files.
-    // The bundled libs are in the resources/lib/ directory.
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            let lib_dir = resource_dir.join("lib");
-            if lib_dir.exists() {
-                let lib_path = lib_dir.to_string_lossy().to_string();
-                let current = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-                if !current.contains(&lib_path) {
-                    let new_val = if current.is_empty() {
-                        lib_path
-                    } else {
-                        format!("{lib_path}:{current}")
-                    };
-                    std::env::set_var("LD_LIBRARY_PATH", &new_val);
-                    info!("Set LD_LIBRARY_PATH to include bundled libs: {}", new_val);
-                }
-            }
-        }
-    }
-
     info!(
         "mpv paths - binary: {:?}, config: {:?}",
         mpv_path, config_dir
