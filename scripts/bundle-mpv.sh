@@ -56,6 +56,7 @@ mkdir -p "$BINARIES_DIR"
 
 MPV_DEST="$BINARIES_DIR/mpv-${TARGET_TRIPLE}"
 echo "  Copying to: $MPV_DEST"
+rm -f "$MPV_DEST"
 cp "$MPV_BIN" "$MPV_DEST"
 chmod +x "$MPV_DEST"
 
