@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm", "appimage", "dmg", "nsis"],
     "externalBin": [
       "binaries/awaw",
       "binaries/mpv"
