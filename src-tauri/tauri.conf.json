@@ -34,7 +34,7 @@
       "binaries/mpv"
     ],
     "resources": [
-      "lib/**/*",
+      "lib/*",
       "mpv-config/**/*"
     ],
     "icon": [

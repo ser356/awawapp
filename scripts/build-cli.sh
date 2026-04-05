@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the awaw CLI binary for bundling with Tauri
-# This script is called before Tauri bundles the app
+# Supports: macOS, Linux, Windows (via MSYS2/Git Bash)
 
 set -e
 
@@ -14,11 +14,17 @@ TARGET_TRIPLE=$(rustc -vV | grep host | cut -d ' ' -f2)
 
 echo "Building awaw CLI for $TARGET_TRIPLE..."
 
+# Determine binary extension
+case "$TARGET_TRIPLE" in
+    *-windows-*) EXE_EXT=".exe" ;;
+    *)           EXE_EXT="" ;;
+esac
+
 # Ensure binaries directory exists with placeholders
 # (Tauri build.rs checks for sidecar files before cargo compiles)
 mkdir -p "$BINARIES_DIR"
-BINARY_PATH="$BINARIES_DIR/awaw-$TARGET_TRIPLE"
-MPV_BINARY_PATH="$BINARIES_DIR/mpv-$TARGET_TRIPLE"
+BINARY_PATH="$BINARIES_DIR/awaw-$TARGET_TRIPLE$EXE_EXT"
+MPV_BINARY_PATH="$BINARIES_DIR/mpv-$TARGET_TRIPLE$EXE_EXT"
 
 if [ ! -f "$BINARY_PATH" ]; then
     touch "$BINARY_PATH"
@@ -37,6 +43,6 @@ if [ -f "$BINARY_PATH" ]; then
     chmod u+w "$BINARY_PATH" 2>/dev/null || true
     rm -f "$BINARY_PATH"
 fi
-cp "target/release/awaw" "$BINARY_PATH"
+cp "target/release/awaw$EXE_EXT" "$BINARY_PATH"
 
 echo "CLI binary ready: $BINARY_PATH ($(du -h "$BINARY_PATH" | cut -f1))"
