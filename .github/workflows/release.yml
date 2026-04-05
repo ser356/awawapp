@@ -37,7 +37,26 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev \
-            pkg-config
+            pkg-config \
+            mpv \
+            libmpv-dev
+
+      - name: Install macOS dependencies
+        if: matrix.platform == 'macos-latest'
+        run: brew install mpv
+
+      - name: Install Windows dependencies
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          # Download official mpv build for Windows
+          MPV_VERSION="0.39.0"
+          MPV_URL="https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20241208/mpv-x86_64-v3-20241208-git-9701b63.7z"
+          mkdir -p /tmp/mpv-win
+          curl -fsSL "$MPV_URL" -o /tmp/mpv-win/mpv.7z
+          7z x /tmp/mpv-win/mpv.7z -o/tmp/mpv-win/extracted
+          # Add to PATH so bundle-mpv.sh can find it
+          echo "/tmp/mpv-win/extracted" >> "$GITHUB_PATH"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -56,24 +75,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build sidecar binary
+      - name: Build CLI sidecar
         shell: bash
-        run: |
-          TARGET_TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
-          mkdir -p src-tauri/binaries
-          # Create placeholder so tauri-build doesn't fail during cargo build
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            touch "src-tauri/binaries/awaw-${TARGET_TRIPLE}.exe"
-          else
-            touch "src-tauri/binaries/awaw-${TARGET_TRIPLE}"
-          fi
-          cargo build --release --bin awaw --manifest-path src-tauri/Cargo.toml
-          # Replace placeholder with the real binary
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cp "src-tauri/target/release/awaw.exe" "src-tauri/binaries/awaw-${TARGET_TRIPLE}.exe"
-          else
-            cp "src-tauri/target/release/awaw" "src-tauri/binaries/awaw-${TARGET_TRIPLE}"
-          fi
+        run: bash scripts/build-cli.sh
+
+      - name: Bundle mpv + dylibs + uosc
+        shell: bash
+        run: bash scripts/bundle-mpv.sh
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

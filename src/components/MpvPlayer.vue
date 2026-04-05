@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { invoke } from '@tauri-apps/api/core';
 import {
   init,
   destroy,
@@ -78,32 +79,44 @@ async function initMpv() {
     } catch {
       // Ignore - no previous connection
     }
-    
+
     // Small delay to ensure socket is cleaned up
     await new Promise(resolve => setTimeout(resolve, 100));
-    
+
+    // Resolve bundled mpv binary and config paths from the Tauri backend
+    const mpvPaths = await invoke<{ mpv_path: string | null; config_dir: string | null }>('get_mpv_paths');
+
+    // Build args - use bundled config dir if available
+    const args = [
+      // Video output
+      '--vo=gpu-next',
+      '--hwdec=auto-safe',
+      // Window
+      '--geometry=1280x720',
+      '--autofit-larger=90%x90%',
+      '--keep-open=yes',
+      // Disable built-in OSC (we use uosc)
+      '--osc=no',
+      '--osd-bar=no',
+      '--osd-level=1',
+      // Cache for streaming
+      '--cache=yes',
+      '--demuxer-max-bytes=150MiB',
+      '--demuxer-max-back-bytes=75MiB',
+      // Title
+      `--title=${props.title}`,
+      `--force-media-title=${props.title}`,
+    ];
+
+    // Point mpv to bundled config (includes mpv.conf, uosc scripts, script-opts)
+    if (mpvPaths.config_dir) {
+      args.push(`--config-dir=${mpvPaths.config_dir}`);
+    }
+
     // mpv with uosc - modern beautiful controls IN the player
     const config: MpvConfig = {
-      args: [
-        // Video output
-        '--vo=gpu-next',
-        '--hwdec=auto-safe',
-        // Window
-        '--geometry=1280x720',
-        '--autofit-larger=90%x90%',
-        '--keep-open=yes',
-        // Disable built-in OSC (we use uosc)
-        '--osc=no',
-        '--osd-bar=no',
-        '--osd-level=1',
-        // Cache for streaming
-        '--cache=yes',
-        '--demuxer-max-bytes=150MiB',
-        '--demuxer-max-back-bytes=75MiB',
-        // Title
-        `--title=${props.title}`,
-        `--force-media-title=${props.title}`,
-      ],
+      path: mpvPaths.mpv_path ?? undefined,
+      args,
       observedProperties: ['pause', 'eof-reached'],
       ipcTimeoutMs: 5000,
     };
@@ -175,8 +188,7 @@ onUnmounted(() => {
       <i class="pi pi-exclamation-triangle"></i>
       <p class="error-msg">{{ errorMsg }}</p>
       <p class="hint">
-        {{ t('player.installMpvHint') || 'mpv debe estar instalado:' }}
-        <code>brew install mpv</code>
+        {{ t('player.installMpvHint') || 'Error al iniciar el reproductor. Reinicia la app o reinstala.' }}
       </p>
       <div class="error-actions">
         <Button 
