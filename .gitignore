@@ -27,5 +27,10 @@ dist-ssr
 src-tauri/binaries/awaw-*
 src-tauri/binaries/mpv-*
 
+# Bundled dylibs (copied by scripts/bundle-mpv.sh from Homebrew)
+# libmpv-wrapper.dylib is committed; everything else is a build artifact
+src-tauri/lib/*
+!src-tauri/lib/libmpv-wrapper.dylib
+
 # uosc scripts (downloaded by scripts/bundle-mpv.sh)
 src-tauri/mpv-config/scripts/uosc/
