@@ -529,13 +529,29 @@ async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
     };
 
     // Resolve config directory from bundled resources.
-    // Tauri bundles resources into <app>/Contents/Resources/ on macOS,
-    // /usr/lib/<appname>/ on Linux (deb), or next to binary (AppImage).
     let config_dir = app.path().resource_dir()
         .ok()
         .map(|dir| dir.join("mpv-config"))
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().to_string());
+
+    // On Windows, add the resource lib/ directory to PATH so mpv.exe
+    // can find its bundled DLLs. Resources go to $INSTDIR/lib/ but
+    // mpv.exe is in $INSTDIR/ — Windows doesn't search subdirectories.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let lib_dir = resource_dir.join("lib");
+            if lib_dir.exists() {
+                let lib_path = lib_dir.to_string_lossy().to_string();
+                let current = std::env::var("PATH").unwrap_or_default();
+                if !current.contains(&lib_path) {
+                    std::env::set_var("PATH", format!("{lib_path};{current}"));
+                    info!("Added bundled lib dir to PATH: {}", lib_path);
+                }
+            }
+        }
+    }
 
     info!(
         "mpv paths - binary: {:?}, config: {:?}",
