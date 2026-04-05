@@ -493,20 +493,40 @@ pub struct MpvPaths {
 /// The frontend uses these to launch mpv with the correct binary and config.
 #[tauri::command]
 async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
-    // Resolve sidecar binary path.
-    // Tauri places externalBin sidecars next to the main executable.
-    let mpv_path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
-        .map(|dir| {
-            #[cfg(target_os = "windows")]
-            let binary = dir.join("mpv.exe");
-            #[cfg(not(target_os = "windows"))]
-            let binary = dir.join("mpv");
-            binary
-        })
-        .filter(|p| p.exists())
-        .map(|p| p.to_string_lossy().to_string());
+    // Resolve mpv binary path.
+    // Strategy per platform:
+    //   macOS/Windows: bundled sidecar next to the main executable
+    //   Linux: system mpv (from PATH), since .deb declares it as a dependency
+    let mpv_path = {
+        // First try: bundled sidecar next to the main executable
+        let sidecar = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+            .map(|dir| {
+                #[cfg(target_os = "windows")]
+                let binary = dir.join("mpv.exe");
+                #[cfg(not(target_os = "windows"))]
+                let binary = dir.join("mpv");
+                binary
+            })
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().to_string());
+
+        // On Linux, fall back to system mpv if sidecar not found
+        #[cfg(target_os = "linux")]
+        let result = sidecar.or_else(|| {
+            std::process::Command::new("which")
+                .arg("mpv")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        });
+        #[cfg(not(target_os = "linux"))]
+        let result = sidecar;
+
+        result
+    };
 
     // Resolve config directory from bundled resources.
     // Tauri bundles resources into <app>/Contents/Resources/ on macOS,
