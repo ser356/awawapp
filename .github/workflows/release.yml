@@ -59,8 +59,11 @@ jobs:
           mkdir -p /tmp/mpv-win
           curl -fsSL "$MPV_URL" -o /tmp/mpv-win/mpv.7z
           7z x /tmp/mpv-win/mpv.7z -o/tmp/mpv-win/extracted
-          # Add to PATH so bundle-mpv.sh can find it
-          echo "/tmp/mpv-win/extracted" >> "$GITHUB_PATH"
+          # Find where mpv.exe actually is (may be in a subdirectory)
+          MPV_DIR=$(dirname "$(find /tmp/mpv-win/extracted -name 'mpv.exe' -type f | head -1)")
+          echo "Found mpv.exe in: $MPV_DIR"
+          ls "$MPV_DIR"/mpv.exe
+          echo "$MPV_DIR" >> "$GITHUB_PATH"
 
       - name: Setup Node
         uses: actions/setup-node@v4
