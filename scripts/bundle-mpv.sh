@@ -228,24 +228,16 @@ case "$PLATFORM" in
         ;;
 
     windows)
-        # Windows: mpv official builds are self-contained zips.
-        # Just need to copy DLLs that are next to mpv.exe.
-        MPV_DIR="${MPV_WIN_DIR:-$(dirname "$MPV_BIN")}"
-
-        echo "  Copying DLLs from mpv directory: $MPV_DIR"
-        DLL_COUNT=0
-        for dll in "$MPV_DIR"/*.dll; do
-            [ -f "$dll" ] || continue
-            dll_name="$(basename "$dll")"
-            echo "    Bundling: $dll_name"
-            cp "$dll" "$LIB_DIR/$dll_name"
-            DLL_COUNT=$((DLL_COUNT + 1))
-        done
-
-        if [ "$DLL_COUNT" -eq 0 ]; then
-            echo "  WARNING: No DLLs found next to mpv.exe."
-            echo "  If using a system-installed mpv, copy its DLLs manually to src-tauri/lib/"
-        fi
+        # Windows: Tauri places sidecar externalBin next to the main .exe,
+        # but DLLs in resources/ won't be found by mpv.exe (Windows only
+        # searches the exe's own directory and system PATH for DLLs).
+        # Bundling DLLs also causes WiX/MSI builder failures.
+        #
+        # Instead, require mpv to be installed on the user's system
+        # (via scoop, chocolatey, or manual install from mpv.io).
+        # The bundled mpv.exe sidecar acts as a fallback if mpv is in PATH.
+        echo "  Windows: skipping DLL bundling (mpv must be installed on user's system)"
+        echo "  Users install mpv via: scoop install mpv / choco install mpv"
         ;;
 esac
 
