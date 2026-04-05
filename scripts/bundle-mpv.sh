@@ -56,7 +56,11 @@ mkdir -p "$BINARIES_DIR"
 
 MPV_DEST="$BINARIES_DIR/mpv-${TARGET_TRIPLE}"
 echo "  Copying to: $MPV_DEST"
-rm -f "$MPV_DEST"
+# Remove old binary — chmod first in case it was code-signed/locked
+if [ -f "$MPV_DEST" ]; then
+    chmod u+w "$MPV_DEST" 2>/dev/null || true
+    rm -f "$MPV_DEST"
+fi
 cp "$MPV_BIN" "$MPV_DEST"
 chmod +x "$MPV_DEST"
 

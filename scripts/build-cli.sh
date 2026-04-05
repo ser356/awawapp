@@ -32,6 +32,11 @@ cd "$TAURI_DIR"
 cargo build --release --bin awaw
 
 # Copy to binaries directory with target triple suffix
+# chmod first in case old binary was code-signed/locked
+if [ -f "$BINARY_PATH" ]; then
+    chmod u+w "$BINARY_PATH" 2>/dev/null || true
+    rm -f "$BINARY_PATH"
+fi
 cp "target/release/awaw" "$BINARY_PATH"
 
 echo "CLI binary ready: $BINARY_PATH ($(du -h "$BINARY_PATH" | cut -f1))"
