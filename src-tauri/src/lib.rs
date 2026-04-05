@@ -574,6 +574,62 @@ async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
         }
     }
 
+    // On macOS, pre-load the bundled libmpv.dylib so the wrapper can find it.
+    // libmpv-wrapper.dylib uses dlopen("libmpv.dylib") at runtime, which won't
+    // find the bundled copy without help. Loading it first with RTLD_GLOBAL
+    // puts it in the process symbol table so subsequent dlopen calls find it.
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let lib_dir = resource_dir.join("lib");
+            if lib_dir.exists() {
+                let libmpv_path = lib_dir.join("libmpv.dylib");
+                if libmpv_path.exists() {
+                    let c_path = std::ffi::CString::new(
+                        libmpv_path.to_string_lossy().as_bytes().to_vec(),
+                    )
+                    .ok();
+                    if let Some(path) = c_path {
+                        unsafe {
+                            let handle = libc::dlopen(
+                                path.as_ptr(),
+                                libc::RTLD_LAZY | libc::RTLD_GLOBAL,
+                            );
+                            if handle.is_null() {
+                                let err = libc::dlerror();
+                                let msg = if err.is_null() {
+                                    "unknown error".to_string()
+                                } else {
+                                    std::ffi::CStr::from_ptr(err)
+                                        .to_string_lossy()
+                                        .to_string()
+                                };
+                                warn!("Failed to preload bundled libmpv.dylib: {}", msg);
+                            } else {
+                                info!("Preloaded bundled libmpv.dylib from {:?}", libmpv_path);
+                            }
+                        }
+                    }
+                } else {
+                    info!("No bundled libmpv.dylib found at {:?}, will use system", libmpv_path);
+                }
+
+                // Also set DYLD_LIBRARY_PATH as a fallback mechanism
+                let lib_path = lib_dir.to_string_lossy().to_string();
+                let current = std::env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+                if !current.contains(&lib_path) {
+                    let new_val = if current.is_empty() {
+                        lib_path.clone()
+                    } else {
+                        format!("{lib_path}:{current}")
+                    };
+                    std::env::set_var("DYLD_LIBRARY_PATH", new_val);
+                    info!("Set DYLD_LIBRARY_PATH to include: {}", lib_path);
+                }
+            }
+        }
+    }
+
     info!(
         "mpv paths - binary: {:?}, config: {:?}",
         mpv_path, config_dir

@@ -14,15 +14,8 @@ Lightweight torrent streaming app for macOS. Stream torrents with embedded video
 ## Requirements
 
 - **macOS** — Apple Silicon (M1/M2/M3) or Intel
-- **mpv** — Required for libmpv playback
 
-### Installing mpv
-
-```bash
-brew install mpv
-```
-
-The app uses `tauri-plugin-libmpv` which embeds video directly in the window (like Stremio). The system's libmpv from Homebrew is required.
+The app bundles libmpv and all required libraries — no extra dependencies needed.
 
 ## Installation
 

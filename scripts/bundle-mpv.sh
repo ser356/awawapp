@@ -208,6 +208,43 @@ case "$PLATFORM" in
             echo "  Scanning libmpv-wrapper.dylib dependencies..."
             bundle_macos_recursive "$WRAPPER_FILE"
         fi
+
+        # libmpv.dylib is loaded via dlopen by the wrapper at runtime.
+        # otool can't detect dlopen dependencies, so we must bundle it explicitly.
+        echo "  Bundling libmpv (dlopen dependency of wrapper)..."
+        LIBMPV_PATH=""
+        for search_dir in /opt/homebrew/lib /usr/local/lib /opt/homebrew/Cellar/mpv/*/lib; do
+            for candidate in "$search_dir"/libmpv.dylib "$search_dir"/libmpv.*.dylib; do
+                if [ -f "$candidate" ]; then
+                    LIBMPV_PATH="$(readlink -f "$candidate")"
+                    break 2
+                fi
+            done
+        done
+
+        if [ -z "$LIBMPV_PATH" ]; then
+            echo "  ERROR: libmpv.dylib not found. Install mpv: brew install mpv"
+            exit 1
+        fi
+
+        LIBMPV_NAME="$(basename "$LIBMPV_PATH")"
+        echo "    Found: $LIBMPV_PATH -> $LIBMPV_NAME"
+
+        if [ ! -f "$LIB_DIR/$LIBMPV_NAME" ]; then
+            cp "$LIBMPV_PATH" "$LIB_DIR/$LIBMPV_NAME"
+            chmod u+w "$LIB_DIR/$LIBMPV_NAME"
+            install_name_tool -id "$RPATH_PREFIX/$LIBMPV_NAME" "$LIB_DIR/$LIBMPV_NAME" 2>/dev/null || true
+        fi
+
+        # Create symlink for the base name if the real file is versioned (e.g., libmpv.2.dylib)
+        if [ "$LIBMPV_NAME" != "libmpv.dylib" ] && [ ! -e "$LIB_DIR/libmpv.dylib" ]; then
+            ln -sf "$LIBMPV_NAME" "$LIB_DIR/libmpv.dylib"
+            echo "    Symlinked libmpv.dylib -> $LIBMPV_NAME"
+        fi
+
+        # Recursively bundle libmpv's own dependencies (libavcodec, libavformat, etc.)
+        echo "    Scanning libmpv transitive dependencies..."
+        bundle_macos_recursive "$LIB_DIR/$LIBMPV_NAME"
         ;;
 
     linux)
