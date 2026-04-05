@@ -38,8 +38,7 @@ jobs:
             patchelf \
             libssl-dev \
             pkg-config \
-            mpv \
-            libmpv-dev
+            mpv
 
       - name: Install macOS dependencies
         if: matrix.platform == 'macos-latest'
@@ -49,9 +48,14 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: bash
         run: |
-          # Download official mpv build for Windows
-          MPV_VERSION="0.39.0"
-          MPV_URL="https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20241208/mpv-x86_64-v3-20241208-git-9701b63.7z"
+          # Fetch latest mpv build URL dynamically (shinchiro publishes daily)
+          MPV_URL=$(curl -s https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest \
+            | jq -r '.assets[] | select(.name | test("^mpv-x86_64-[0-9].*\\.7z$")) | .browser_download_url')
+          if [ -z "$MPV_URL" ] || [ "$MPV_URL" = "null" ]; then
+            echo "ERROR: Could not find mpv download URL from GitHub API"
+            exit 1
+          fi
+          echo "Downloading mpv from: $MPV_URL"
           mkdir -p /tmp/mpv-win
           curl -fsSL "$MPV_URL" -o /tmp/mpv-win/mpv.7z
           7z x /tmp/mpv-win/mpv.7z -o/tmp/mpv-win/extracted
