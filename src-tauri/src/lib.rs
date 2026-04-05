@@ -493,29 +493,65 @@ pub struct MpvPaths {
 /// The frontend uses these to launch mpv with the correct binary and config.
 #[tauri::command]
 async fn get_mpv_paths(app: AppHandle) -> Result<MpvPaths, String> {
-    // Resolve sidecar binary path.
-    // Tauri places externalBin sidecars next to the main executable.
-    let mpv_path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
-        .map(|dir| {
-            #[cfg(target_os = "windows")]
-            let binary = dir.join("mpv.exe");
-            #[cfg(not(target_os = "windows"))]
-            let binary = dir.join("mpv");
-            binary
-        })
-        .filter(|p| p.exists())
-        .map(|p| p.to_string_lossy().to_string());
+    // Resolve mpv binary path.
+    // Strategy per platform:
+    //   macOS/Windows: bundled sidecar next to the main executable
+    //   Linux: system mpv (from PATH), since .deb declares it as a dependency
+    let mpv_path = {
+        // First try: bundled sidecar next to the main executable
+        let sidecar = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+            .map(|dir| {
+                #[cfg(target_os = "windows")]
+                let binary = dir.join("mpv.exe");
+                #[cfg(not(target_os = "windows"))]
+                let binary = dir.join("mpv");
+                binary
+            })
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().to_string());
+
+        // On Linux, fall back to system mpv if sidecar not found
+        #[cfg(target_os = "linux")]
+        let result = sidecar.or_else(|| {
+            std::process::Command::new("which")
+                .arg("mpv")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        });
+        #[cfg(not(target_os = "linux"))]
+        let result = sidecar;
+
+        result
+    };
 
     // Resolve config directory from bundled resources.
-    // Tauri bundles resources into <app>/Contents/Resources/ on macOS,
-    // /usr/lib/<appname>/ on Linux (deb), or next to binary (AppImage).
     let config_dir = app.path().resource_dir()
         .ok()
         .map(|dir| dir.join("mpv-config"))
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().to_string());
+
+    // On Windows, add the resource lib/ directory to PATH so mpv.exe
+    // can find its bundled DLLs. Resources go to $INSTDIR/lib/ but
+    // mpv.exe is in $INSTDIR/ — Windows doesn't search subdirectories.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let lib_dir = resource_dir.join("lib");
+            if lib_dir.exists() {
+                let lib_path = lib_dir.to_string_lossy().to_string();
+                let current = std::env::var("PATH").unwrap_or_default();
+                if !current.contains(&lib_path) {
+                    std::env::set_var("PATH", format!("{lib_path};{current}"));
+                    info!("Added bundled lib dir to PATH: {}", lib_path);
+                }
+            }
+        }
+    }
 
     info!(
         "mpv paths - binary: {:?}, config: {:?}",
